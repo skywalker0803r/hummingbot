@@ -1,7 +1,8 @@
 import os  
 from decimal import Decimal  
 from typing import Dict  
-from pydantic import Field  
+from pydantic import Field, field_validator  
+from pydantic_core.core_schema import ValidationInfo  
   
 from hummingbot.client.config.config_data_types import BaseClientModel  
 from hummingbot.connector.connector_base import ConnectorBase  
@@ -20,11 +21,11 @@ class MaDeviationConfig(BaseClientModel):
     """MA 乖離率合約 CTA 策略配置"""  
     script_file_name: str = Field(default_factory=lambda: os.path.basename(__file__))  
       
-    # 1. 交易所名稱  
+    # 1. 交易所名稱 - 預設 bitmart_perpetual  
     connector_name: str = Field(  
-        "binance_perpetual",  
+        "bitmart_perpetual",  
         json_schema_extra={  
-            "prompt": "交易所名稱 (例如 binance_perpetual, bitmart_perpetual)",  
+            "prompt": "交易所名稱 (例如 bitmart_perpetual, binance_perpetual)",  
             "prompt_on_new": True  
         }  
     )  
@@ -35,6 +36,23 @@ class MaDeviationConfig(BaseClientModel):
         json_schema_extra={  
             "prompt": "交易對 (例如 BTC-USDT)",  
             "prompt_on_new": True  
+        }  
+    )  
+      
+    # K 線數據源 (自動推導,可選)  
+    candles_connector: str = Field(  
+        default=None,  
+        json_schema_extra={  
+            "prompt": "K 線數據來源交易所 (留空則自動推導)",  
+            "prompt_on_new": False  
+        }  
+    )  
+      
+    candles_trading_pair: str = Field(  
+        default=None,  
+        json_schema_extra={  
+            "prompt": "K 線交易對 (留空則使用相同交易對)",  
+            "prompt_on_new": False  
         }  
     )  
       
@@ -100,6 +118,25 @@ class MaDeviationConfig(BaseClientModel):
             "prompt_on_new": True  
         }  
     )  
+      
+    # 自動推導 K 線數據源  
+    @field_validator("candles_connector", mode="before")  
+    @classmethod  
+    def set_candles_connector(cls, v, validation_info: ValidationInfo):  
+        """自動從 connector_name 推導 K 線數據源交易所"""  
+        if v is None or v == "":  
+            connector_name = validation_info.data.get("connector_name")  
+            # 移除 _perpetual 後綴,例如 bitmart_perpetual -> bitmart  
+            return connector_name.replace("_perpetual", "")  
+        return v  
+      
+    @field_validator("candles_trading_pair", mode="before")  
+    @classmethod  
+    def set_candles_trading_pair(cls, v, validation_info: ValidationInfo):  
+        """自動使用相同的交易對"""  
+        if v is None or v == "":  
+            return validation_info.data.get("trading_pair")  
+        return v  
   
   
 class MaDeviationStrategy(ScriptStrategyBase):  
@@ -114,10 +151,10 @@ class MaDeviationStrategy(ScriptStrategyBase):
         self.config = config  
         self.active_executors = []  
           
-        # 初始化 K 線數據源  
+        # 初始化 K 線數據源 (使用自動推導的參數)  
         self.candles = CandlesFactory.get_candle(CandlesConfig(  
-            connector=config.connector_name.replace("_perpetual", ""),  
-            trading_pair=config.trading_pair,  
+            connector=config.candles_connector,  
+            trading_pair=config.candles_trading_pair,  
             interval=config.candles_interval,  
             max_records=config.ma_period + 50  
         ))  
@@ -158,7 +195,7 @@ class MaDeviationStrategy(ScriptStrategyBase):
           
         self.logger().info(  
             f"Price: {current_price:.2f}, MA{self.config.ma_period}: {ma:.2f}, "  
-            f"Deviation: {deviation:.4f}"  
+            f"Deviation: {deviation:.4f}, Active Executors: {len(self.active_executors)}"  
         )  
           
         # 判斷交易信號  
