@@ -1,4 +1,5 @@
 import os
+import asyncio
 from decimal import Decimal
 from typing import Dict, Set, List, Deque
 from collections import deque
@@ -134,7 +135,8 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
                         )
                         executor = PositionExecutor(config=executor_config, strategy=self)
                         self.active_executors.append(executor)
-                        self.logger().info(f"Created new {side.name} position executor.")
+                        executor.start()  # Start the executor
+                        self.logger().info(f"Created and started new {side.name} position executor.")
                     else:
                         self.logger().info("No peak or trough detected.")
 
@@ -146,12 +148,19 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
 
     async def on_stop(self):
         self.logger().info("Strategy stopped. Closing all open positions...")
-        self.close_open_positions()
-        self.candles.stop()
-
-    def close_open_positions(self):
+        # 1. First, call early_stop() to trigger the closing process
         for executor in self.active_executors:
-            executor.early_stop()
+            if not executor.is_closed:
+                executor.early_stop()
+        
+        # 2. Wait for all executors to be closed (try up to 3 times, waiting 2 seconds each time)
+        for i in range(3):
+            if all([executor.is_closed for executor in self.active_executors]):
+                break
+            await asyncio.sleep(2.0)
+        
+        # 3. Stop the candle feed
+        self.candles.stop()
 
     def format_status(self) -> str:
         if not self.ready_to_trade:
