@@ -47,9 +47,7 @@ class GenConfig(BaseClientModel):
 
 
 class CreateMACDMMConfig(ScriptStrategyBase):
-    @classmethod
-    def init_markets(cls, config: GenConfig):
-        cls.markets = {}
+    markets = {}
 
     def __init__(self, connectors: Dict[str, ConnectorBase], config: GenConfig):
         super().__init__(connectors)
