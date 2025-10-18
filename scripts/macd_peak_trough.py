@@ -66,6 +66,7 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
         )
         self.candles.start()
         self.macd_values = deque(maxlen=3)
+        self.last_macd_index = -1
         self.leverage_set = False
         self.active_executors: List[PositionExecutor] = []
         self.stored_executors: Deque[PositionExecutor] = deque(maxlen=10)
@@ -95,34 +96,45 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
             df = self.candles.candles_df
             df.ta.macd(fast=self.config.macd_fast, slow=self.config.macd_slow, signal=self.config.macd_signal, append=True)
             macd_col = f"MACD_{self.config.macd_fast}_{self.config.macd_slow}_{self.config.macd_signal}"
-            current_macd = df[macd_col].iloc[-1]
-            self.macd_values.append(current_macd)
+            
+            # Check if there is a new, un-processed candle (and thus a new MACD value)
+            current_index = len(df) - 1
+            if current_index > self.last_macd_index:
+                
+                # Update the last processed index
+                self.last_macd_index = current_index
+                
+                current_macd = df[macd_col].iloc[-1]
+                self.macd_values.append(current_macd)
+                self.logger().info(f"New MACD value appended: {current_macd:.6f}. Queue: {list(self.macd_values)}")
 
-            if len(self.macd_values) == 3:
-                m1, m2, m3 = self.macd_values[0], self.macd_values[1], self.macd_values[2]
-                is_positive_peak = m1 < m2 and m2 > m3 and m2 > 0
-                is_negative_peak = m1 > m2 and m2 < m3 and m2 < 0
-
-                if is_positive_peak or is_negative_peak:
-                    price = self.connectors[self.config.exchange].get_mid_price(self.config.trading_pair)
-                    side = TradeType.SELL if is_positive_peak else TradeType.BUY
+                if len(self.macd_values) == 3:
+                    m1, m2, m3 = self.macd_values[0], self.macd_values[1], self.macd_values[2]
                     
-                    executor_config = PositionExecutorConfig(
-                        timestamp=self.current_timestamp,
-                        trading_pair=self.config.trading_pair,
-                        connector_name=self.config.exchange,
-                        side=side,
-                        entry_price=price,
-                        amount=self.config.order_amount,
-                        leverage=self.config.leverage,
-                        triple_barrier_config=TripleBarrierConfig(
-                            stop_loss=self.config.stop_loss_pct,
-                            take_profit=self.config.take_profit_pct,
+                    # Logic to identify peak or trough remains the same
+                    is_positive_peak = m1 < m2 and m2 > m3 and m2 > 0
+                    is_negative_peak = m1 > m2 and m2 < m3 and m2 < 0
+
+                    if is_positive_peak or is_negative_peak:
+                        price = self.connectors[self.config.exchange].get_mid_price(self.config.trading_pair)
+                        side = TradeType.SELL if is_positive_peak else TradeType.BUY
+                        
+                        executor_config = PositionExecutorConfig(
+                            timestamp=self.current_timestamp,
+                            trading_pair=self.config.trading_pair,
+                            connector_name=self.config.exchange,
+                            side=side,
+                            entry_price=price,
+                            amount=self.config.order_amount,
+                            leverage=self.config.leverage,
+                            triple_barrier_config=TripleBarrierConfig(
+                                stop_loss=self.config.stop_loss_pct,
+                                take_profit=self.config.take_profit_pct,
+                            )
                         )
-                    )
-                    executor = PositionExecutor(config=executor_config, strategy=self)
-                    self.active_executors.append(executor)
-                    self.logger().info(f"Created new {side.name} position executor.")
+                        executor = PositionExecutor(config=executor_config, strategy=self)
+                        self.active_executors.append(executor)
+                        self.logger().info(f"Created new {side.name} position executor.")
 
     def clean_and_store_executors(self):
         executors_to_store = [executor for executor in self.active_executors if executor.is_closed]
