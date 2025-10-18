@@ -9,6 +9,7 @@ from pydantic import Field
 from hummingbot.client.config.config_data_types import BaseClientModel
 from hummingbot.connector.connector_base import ConnectorBase
 from hummingbot.core.data_type.common import OrderType, PositionAction, PositionMode, PositionSide, TradeType
+from hummingbot.core.event.events import OrderFilledEvent
 from hummingbot.data_feed.candles_feed.candles_factory import CandlesFactory
 from hummingbot.data_feed.candles_feed.data_types import CandlesConfig
 from hummingbot.strategy.script_strategy_base import ScriptStrategyBase
@@ -120,6 +121,30 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
                 elif is_negative_peak:
                     self.execute_trade(TradeType.BUY, "Opening long position", self.config.order_amount, PositionAction.OPEN)
 
+    def did_fill_order(self, order_filled_event: OrderFilledEvent):
+        """
+        An event handler for when an order is filled.
+        """
+        order_id = order_filled_event.order_id
+        trading_pair = f"{order_filled_event.base_asset}-{order_filled_event.quote_asset}"
+
+        if trading_pair in self.active_tp_sl_orders:
+            active_orders = self.active_tp_sl_orders[trading_pair]
+            if order_id == active_orders["tp"]:
+                self.logger().info(f"Take profit order {order_id} filled. Cancelling stop loss order {active_orders['sl']}.")
+                try:
+                    self.cancel(self.config.exchange, trading_pair, active_orders["sl"])
+                except Exception as e:
+                    self.logger().error(f"Failed to cancel order {active_orders['sl']}: {e}", exc_info=True)
+                del self.active_tp_sl_orders[trading_pair]
+            elif order_id == active_orders["sl"]:
+                self.logger().info(f"Stop loss order {order_id} filled. Cancelling take profit order {active_orders['tp']}.")
+                try:
+                    self.cancel(self.config.exchange, trading_pair, active_orders["tp"])
+                except Exception as e:
+                    self.logger().error(f"Failed to cancel order {active_orders['tp']}: {e}", exc_info=True)
+                del self.active_tp_sl_orders[trading_pair]
+
     def place_tp_sl_orders(self, position):
         if position.trading_pair in self.active_tp_sl_orders:
             return
@@ -133,13 +158,13 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
                 sl_price = price * (1 - self.config.stop_loss_pct)
                 self.logger().info(f"Placing TP/SL for LONG. TP: {tp_price}, SL: {sl_price}")
                 tp_id = self.sell(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.LIMIT, tp_price, PositionAction.CLOSE)
-                sl_id = self.sell(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.STOP_LIMIT, sl_price, stop_price=sl_price, position_action=PositionAction.CLOSE)
+                sl_id = self.sell(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.MARKET, sl_price, stop_price=sl_price, position_action=PositionAction.CLOSE)
             else:  # SHORT
                 tp_price = price * (1 - self.config.take_profit_pct)
                 sl_price = price * (1 + self.config.stop_loss_pct)
                 self.logger().info(f"Placing TP/SL for SHORT. TP: {tp_price}, SL: {sl_price}")
                 tp_id = self.buy(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.LIMIT, tp_price, PositionAction.CLOSE)
-                sl_id = self.buy(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.STOP_LIMIT, sl_price, stop_price=sl_price, position_action=PositionAction.CLOSE)
+                sl_id = self.buy(self.config.exchange, self.config.trading_pair, abs(amount), OrderType.MARKET, sl_price, stop_price=sl_price, position_action=PositionAction.CLOSE)
             
             self.active_tp_sl_orders[position.trading_pair] = {"tp": tp_id, "sl": sl_id}
         except Exception as e:
