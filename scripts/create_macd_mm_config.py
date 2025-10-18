@@ -1,7 +1,7 @@
 import os
 import yaml
 from decimal import Decimal
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from pydantic import Field
 
@@ -47,11 +47,13 @@ class GenConfig(BaseClientModel):
 
 
 class CreateMACDMMConfig(ScriptStrategyBase):
-    markets = {}
+    @classmethod
+    def init_markets(cls, config: GenConfig):
+        cls.markets = {}
 
-    def __init__(self, connectors: Dict[str, ConnectorBase], config: GenConfig):
-        super().__init__(connectors)
-        self.config = config
+    def __init__(self, connectors: Dict[str, ConnectorBase], config: Optional[GenConfig] = None):
+        super().__init__(connectors, config)
+        self.config = config if config else GenConfig()
 
     def on_tick(self):
         config_dict = {
