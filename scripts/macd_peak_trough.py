@@ -110,10 +110,12 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
 
                 if len(self.macd_values) == 3:
                     m1, m2, m3 = self.macd_values[0], self.macd_values[1], self.macd_values[2]
+                    self.logger().info(f"MACD values: m1={m1:.6f}, m2={m2:.6f}, m3={m3:.6f}")
                     
                     # Logic to identify peak or trough remains the same
                     is_positive_peak = m1 < m2 and m2 > m3 and m2 > 0
                     is_negative_peak = m1 > m2 and m2 < m3 and m2 < 0
+                    self.logger().info(f"Peak detection: is_positive_peak={is_positive_peak}, is_negative_peak={is_negative_peak}")
 
                     if is_positive_peak or is_negative_peak:
                         price = self.connectors[self.config.exchange].get_mid_price(self.config.trading_pair)
@@ -135,6 +137,8 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
                         executor = PositionExecutor(config=executor_config, strategy=self)
                         self.active_executors.append(executor)
                         self.logger().info(f"Created new {side.name} position executor.")
+                    else:
+                        self.logger().info("No peak or trough detected.")
 
     def clean_and_store_executors(self):
         executors_to_store = [executor for executor in self.active_executors if executor.is_closed]
