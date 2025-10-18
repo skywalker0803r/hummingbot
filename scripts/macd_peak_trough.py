@@ -164,14 +164,14 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
         if len(self.stored_executors) > 0:
             lines.append("\n########################################## Closed Executors ##########################################")
             for executor in self.stored_executors:
-                lines.extend([f"|Signal id: {executor.timestamp}"])
+                lines.extend([f"|Signal id: {executor.config.timestamp}"])
                 lines.extend(executor.to_format_status())
                 lines.extend(["-----------------------------------------------------------------------------------------------------------"])
 
         if len(self.active_executors) > 0:
             lines.append("\n########################################## Active Executors ##########################################")
             for executor in self.active_executors:
-                lines.extend([f"|Signal id: {executor.timestamp}"])
+                lines.extend([f"|Signal id: {executor.config.timestamp}"])
                 lines.extend(executor.to_format_status())
         
         return "\n".join(lines)
