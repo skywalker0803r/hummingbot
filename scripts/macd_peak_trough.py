@@ -66,7 +66,7 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
         )
         self.candles.start()
         self.macd_values = deque(maxlen=3)
-        self.last_macd_index = -1
+        self.last_candle_timestamp = 0
         self.leverage_set = False
         self.active_executors: List[PositionExecutor] = []
         self.stored_executors: Deque[PositionExecutor] = deque(maxlen=10)
@@ -97,12 +97,10 @@ class MACDPeakTroughStrategy(ScriptStrategyBase):
             df.ta.macd(fast=self.config.macd_fast, slow=self.config.macd_slow, signal=self.config.macd_signal, append=True)
             macd_col = f"MACD_{self.config.macd_fast}_{self.config.macd_slow}_{self.config.macd_signal}"
             
-            # Check if there is a new, un-processed candle (and thus a new MACD value)
-            current_index = len(df) - 1
-            if current_index > self.last_macd_index:
-                
-                # Update the last processed index
-                self.last_macd_index = current_index
+            # Use the timestamp of the latest candle to check for new data
+            current_timestamp = df["timestamp"].iloc[-1]
+            if current_timestamp > self.last_candle_timestamp:
+                self.last_candle_timestamp = current_timestamp
                 
                 current_macd = df[macd_col].iloc[-1]
                 self.macd_values.append(current_macd)
