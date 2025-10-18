@@ -49,32 +49,31 @@ class GenConfig(BaseClientModel):
 class CreateMACDMMConfig(ScriptStrategyBase):
     markets = {}
 
-    def __init__(self, connectors: Dict[str, ConnectorBase], config: GenConfig):
+    def __init__(self, connectors: Dict[str, ConnectorBase]):
         super().__init__(connectors)
-        self.config = config
 
     def on_tick(self):
         config_dict = {
-            "controller_name": self.config.controller_name,
-            "controller_type": self.config.controller_type,
-            "connector_name": self.config.connector_name,
-            "trading_pair": self.config.trading_pair,
-            "total_amount_quote": float(self.config.total_amount_quote),
-            "buy_spreads": [float(s) for s in self.config.buy_spreads],
-            "sell_spreads": [float(s) for s in self.config.sell_spreads],
-            "buy_amounts_pct": [float(a) for a in self.config.buy_amounts_pct],
-            "sell_amounts_pct": [float(a) for a in self.config.sell_amounts_pct],
-            "executor_refresh_time": self.config.executor_refresh_time,
-            "leverage": self.config.leverage,
-            "position_mode": self.config.position_mode,
-            "interval": self.config.interval,
-            "macd_fast": self.config.macd_fast,
-            "macd_slow": self.config.macd_slow,
-            "macd_signal": self.config.macd_signal,
-            "volatility_factor": float(self.config.volatility_factor),
-            "stop_loss": float(self.config.stop_loss),
-            "take_profit": float(self.config.take_profit),
-            "time_limit": self.config.time_limit,
+            "controller_name": self.strategy_config.controller_name,
+            "controller_type": self.strategy_config.controller_type,
+            "connector_name": self.strategy_config.connector_name,
+            "trading_pair": self.strategy_config.trading_pair,
+            "total_amount_quote": float(self.strategy_config.total_amount_quote),
+            "buy_spreads": [float(s) for s in self.strategy_config.buy_spreads],
+            "sell_spreads": [float(s) for s in self.strategy_config.sell_spreads],
+            "buy_amounts_pct": [float(a) for a in self.strategy_config.buy_amounts_pct],
+            "sell_amounts_pct": [float(a) for a in self.strategy_config.sell_amounts_pct],
+            "executor_refresh_time": self.strategy_config.executor_refresh_time,
+            "leverage": self.strategy_config.leverage,
+            "position_mode": self.strategy_config.position_mode,
+            "interval": self.strategy_config.interval,
+            "macd_fast": self.strategy_config.macd_fast,
+            "macd_slow": self.strategy_config.macd_slow,
+            "macd_signal": self.strategy_config.macd_signal,
+            "volatility_factor": float(self.strategy_config.volatility_factor),
+            "stop_loss": float(self.strategy_config.stop_loss),
+            "take_profit": float(self.strategy_config.take_profit),
+            "time_limit": self.strategy_config.time_limit,
         }
 
         yaml_string = yaml.dump(config_dict)
