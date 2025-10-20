@@ -197,6 +197,7 @@ class OkxExchange(ExchangePyBase):
             "side": trade_type.name.lower(),
             "instId": await self.exchange_symbol_associated_to_pair(trading_pair=trading_pair),
             "sz": str(amount),
+            "tag": "3289a2397377BCDE",
         }
         if order_type.is_limit_type():
             data["px"] = f"{price:f}"
