@@ -32,6 +32,10 @@ from hummingbot.strategy.avellaneda_market_making.avellaneda_market_making_confi
     MultiOrderLevelModel,
     TrackHangingOrdersModel,
 )
+from hummingbot.strategy.avellaneda_market_making.adaptive_gamma_learner import (
+    OnlineGammaLearner,
+    SimpleGammaScheduler,
+)
 from hummingbot.strategy.conditional_execution_state import (
     RunAlwaysExecutionState,
     RunInTimeConditionalExecutionState
@@ -120,6 +124,15 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         self._optimal_bid = s_decimal_zero
         self._debug_csv_path = debug_csv_path
         self._is_debug = is_debug
+        
+        # 自適應 gamma 相關
+        self._gamma_learner = None
+        self._use_adaptive_gamma = False
+        self._last_pnl = Decimal("0")
+        self._total_pnl = Decimal("0")
+        
+        # 初始化自適應 gamma
+        self._initialize_adaptive_gamma()
         try:
             if self._is_debug:
                 os.unlink(self._debug_csv_path)
@@ -128,6 +141,31 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
 
         self.get_config_map_execution_mode()
         self.get_config_map_hanging_orders()
+
+    def _initialize_adaptive_gamma(self):
+        """初始化自適應 gamma 學習器"""
+        try:
+            if isinstance(self._config_map.risk_factor, str):
+                if self._config_map.risk_factor.lower() == "adaptive":
+                    self._gamma_learner = OnlineGammaLearner(
+                        initial_gamma=1.0,
+                        learning_rate=0.01,
+                        gamma_min=0.1,
+                        gamma_max=10.0
+                    )
+                    self._use_adaptive_gamma = True
+                    self.logger().info("Adaptive gamma learning enabled with OnlineGammaLearner")
+                elif self._config_map.risk_factor.lower() == "simple_adaptive":
+                    self._gamma_learner = SimpleGammaScheduler(base_gamma=1.0)
+                    self._use_adaptive_gamma = True
+                    self.logger().info("Adaptive gamma learning enabled with SimpleGammaScheduler")
+                else:
+                    self._use_adaptive_gamma = False
+            else:
+                self._use_adaptive_gamma = False
+        except Exception as e:
+            self.logger().error(f"Error initializing adaptive gamma: {e}")
+            self._use_adaptive_gamma = False
 
     def all_markets_ready(self):
         return all([market.ready for market in self._sb_markets])
@@ -232,7 +270,13 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
 
     @property
     def gamma(self):
-        return self._config_map.risk_factor
+        if self._use_adaptive_gamma and self._gamma_learner is not None:
+            return self._gamma_learner.get_current_gamma()
+        else:
+            # 如果是字串但不是自適應模式，回傳預設值
+            if isinstance(self._config_map.risk_factor, str):
+                return Decimal("1.0")
+            return self._config_map.risk_factor
 
     @property
     def alpha(self):
@@ -543,11 +587,35 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
 
         volatility_pct = self._avg_vol.current_value / float(self.get_price()) * 100.0
         if all((self.gamma, self._alpha, self._kappa, not isnan(volatility_pct))):
+            gamma_info = f"risk_factor(\u03B3)= {self.gamma:.5E}"
+            if self._use_adaptive_gamma and self._gamma_learner is not None:
+                if isinstance(self._gamma_learner, OnlineGammaLearner):
+                    gamma_info += " (Adaptive Learning)"
+                elif isinstance(self._gamma_learner, SimpleGammaScheduler):
+                    gamma_info += " (Simple Adaptive)"
+            
             lines.extend(["", f"  Strategy parameters:",
-                          f"    risk_factor(\u03B3)= {self.gamma:.5E}",
+                          f"    {gamma_info}",
                           f"    order_book_intensity_factor(\u0391)= {self._alpha:.5E}",
                           f"    order_book_depth_factor(\u03BA)= {self._kappa:.5E}",
                           f"    volatility= {volatility_pct:.3f}%"])
+            
+            # 如果使用自適應 gamma，顯示額外信息
+            if self._use_adaptive_gamma and self._gamma_learner is not None:
+                try:
+                    inventory_deviation = self._calculate_inventory_deviation()
+                    current_pnl = self._total_pnl
+                    lines.extend([f"    inventory_deviation= {inventory_deviation:.3f}",
+                                f"    total_pnl= {current_pnl:.6f}"])
+                    
+                    if isinstance(self._gamma_learner, OnlineGammaLearner):
+                        stats = self._gamma_learner.get_statistics()
+                        if stats:
+                            lines.extend([f"    gamma_range= {stats.get('gamma_range', 'N/A')}",
+                                        f"    avg_reward= {stats.get('avg_reward', 0):.6f}"])
+                except Exception as e:
+                    self.logger().debug(f"Error displaying adaptive gamma stats: {e}")
+            
             if self._execution_state.time_left is not None:
                 lines.extend([f"    time until end of trading cycle = {str(datetime.timedelta(seconds=float(self._execution_state.time_left)//1e3))}"])
             else:
@@ -678,9 +746,117 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         base_balance = market.get_balance(base_asset)
         quote_balance = market.get_balance(quote_asset)
         inventory_in_base = quote_balance / price + base_balance
+        
+        # 更新自適應 gamma
+        if self._use_adaptive_gamma and self._gamma_learner is not None:
+            self._update_adaptive_gamma()
 
     def collect_market_variables(self, timestamp: float):
         self.c_collect_market_variables(timestamp)
+
+    def _update_adaptive_gamma(self):
+        """更新自適應 gamma 值"""
+        try:
+            # 計算當前 PnL
+            current_pnl = self._calculate_current_pnl()
+            
+            # 計算庫存偏離
+            inventory_deviation = self._calculate_inventory_deviation()
+            
+            # 獲取當前波動率和價差
+            volatility = float(self.get_volatility()) if self._avg_vol and self._avg_vol.is_sampling_buffer_full else 0.01
+            spread = float(self.c_get_spread()) if self._avg_vol and self._avg_vol.is_sampling_buffer_full else 0.01
+            
+            # 更新學習器
+            if isinstance(self._gamma_learner, OnlineGammaLearner):
+                updated_gamma = self._gamma_learner.update(
+                    current_pnl=float(current_pnl),
+                    inventory_deviation=float(inventory_deviation),
+                    volatility=volatility,
+                    spread=spread
+                )
+            elif isinstance(self._gamma_learner, SimpleGammaScheduler):
+                updated_gamma = self._gamma_learner.get_gamma(
+                    volatility=volatility,
+                    inventory_deviation=float(inventory_deviation)
+                )
+            
+            if self._is_debug:
+                self.logger().info(f"Adaptive gamma updated: {updated_gamma:.6f}, "
+                                 f"PnL: {current_pnl:.6f}, "
+                                 f"inventory_deviation: {inventory_deviation:.6f}, "
+                                 f"volatility: {volatility:.6f}")
+                                 
+        except Exception as e:
+            self.logger().error(f"Error updating adaptive gamma: {e}")
+
+    def _calculate_current_pnl(self) -> Decimal:
+        """計算當前 PnL"""
+        try:
+            market = self._market_info.market
+            base_asset = self._market_info.base_asset
+            quote_asset = self._market_info.quote_asset
+            current_price = Decimal(str(self.get_price()))
+            
+            # 獲取當前餘額
+            base_balance = market.get_balance(base_asset)
+            quote_balance = market.get_balance(quote_asset)
+            
+            # 計算當前總價值（以 quote asset 計算）
+            current_total_value = base_balance * current_price + quote_balance
+            
+            # 如果是第一次計算，記錄初始值
+            if self._total_pnl == Decimal("0"):
+                # 假設初始目標是 50/50 分配
+                target_base_value = current_total_value * self.inventory_target_base
+                initial_base_amount = target_base_value / current_price
+                initial_quote_amount = current_total_value - target_base_value
+                self._last_pnl = initial_base_amount * current_price + initial_quote_amount
+            
+            # 計算 PnL 變化
+            pnl_change = current_total_value - self._last_pnl
+            self._total_pnl += pnl_change
+            self._last_pnl = current_total_value
+            
+            return self._total_pnl
+            
+        except Exception as e:
+            self.logger().error(f"Error calculating PnL: {e}")
+            return Decimal("0")
+
+    def _calculate_inventory_deviation(self) -> Decimal:
+        """計算庫存偏離程度"""
+        try:
+            current_inventory_pct = self._calculate_current_inventory_percentage()
+            target_inventory_pct = self.inventory_target_base
+            deviation = abs(current_inventory_pct - target_inventory_pct)
+            return deviation
+        except Exception as e:
+            self.logger().error(f"Error calculating inventory deviation: {e}")
+            return Decimal("0")
+
+    def _calculate_current_inventory_percentage(self) -> Decimal:
+        """計算當前庫存百分比"""
+        try:
+            market = self._market_info.market
+            base_asset = self._market_info.base_asset
+            quote_asset = self._market_info.quote_asset
+            current_price = Decimal(str(self.get_price()))
+            
+            base_balance = market.get_balance(base_asset)
+            quote_balance = market.get_balance(quote_asset)
+            
+            base_value = base_balance * current_price
+            total_value = base_value + quote_balance
+            
+            if total_value > 0:
+                return base_value / total_value
+            else:
+                return self.inventory_target_base
+                
+        except Exception as e:
+            self.logger().error(f"Error calculating inventory percentage: {e}")
+            return self.inventory_target_base
 
     cdef double c_get_spread(self):
         cdef:

@@ -180,11 +180,10 @@ class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
         ),
         json_schema_extra={"prompt": "Do you want to enable order optimization? (Yes/No)"}
     )
-    risk_factor: Decimal = Field(
+    risk_factor: Union[Decimal, str] = Field(
         default=Decimal("1"),
-        description="The risk factor (\u03B3).",
-        gt=0,
-        json_schema_extra={"prompt": "Enter risk factor (\u03B3)", "prompt_on_new": True},
+        description="The risk factor (\u03B3) or adaptive method ('adaptive', 'simple_adaptive').",
+        json_schema_extra={"prompt": "Enter risk factor (\u03B3) or adaptive method ('adaptive', 'simple_adaptive')", "prompt_on_new": True},
     )
     order_amount_shape_factor: Decimal = Field(
         default=Decimal("0"),
@@ -368,7 +367,6 @@ class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
 
     @field_validator(
         "order_amount",
-        "risk_factor",
         "order_refresh_time",
         "max_order_age",
         "filled_order_delay",
@@ -380,6 +378,31 @@ class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
         if ret is not None:
             raise ValueError(ret)
         return v
+
+    @field_validator("risk_factor", mode="before")
+    @classmethod
+    def validate_risk_factor(cls, v):
+        """Validate risk factor - can be decimal or adaptive method string."""
+        if isinstance(v, str):
+            valid_methods = ["adaptive", "simple_adaptive"]
+            if v.lower() in valid_methods:
+                return v.lower()
+            else:
+                # Try to parse as decimal
+                try:
+                    decimal_v = Decimal(v)
+                    if decimal_v <= 0:
+                        raise ValueError("Risk factor must be greater than 0")
+                    return decimal_v
+                except:
+                    raise ValueError(f"Invalid risk factor. Use a positive number or one of: {valid_methods}")
+        else:
+            # Handle Decimal or numeric input
+            if isinstance(v, (int, float)):
+                v = Decimal(str(v))
+            if v <= 0:
+                raise ValueError("Risk factor must be greater than 0")
+            return v
 
     @field_validator("min_spread", mode="before")
     @classmethod

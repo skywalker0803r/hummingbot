@@ -38,6 +38,10 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         object _kappa
         object _gamma
         object _eta
+        object _gamma_learner
+        bint _use_adaptive_gamma
+        object _last_pnl
+        object _total_pnl
         str _execution_mode
         str _execution_timeframe
         object _execution_state
