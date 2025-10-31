@@ -73,9 +73,19 @@ WORKDIR /home/hummingbot
 COPY --from=builder /opt/conda/ /opt/conda/
 COPY --from=builder /home/ /home/
 
+# 新增：初始化 Conda，將必要的函數寫入 .bashrc
+RUN /opt/conda/bin/conda init bash
+
 # Setting bash as default shell because we have .bashrc with customized PATH (setting SHELL affects RUN, CMD and ENTRYPOINT, but not manual commands e.g. `docker run image COMMAND`!)
 SHELL [ "/bin/bash", "-lc" ]
 
 # Set the default command to run when starting the container
 
-CMD conda activate hummingbot && ./bin/hummingbot_quickstart.py 2>> ./logs/errors.log
+# 替換原有的 CMD 行
+# CMD conda activate hummingbot && ./bin/hummingbot_quickstart.py 2>> ./logs/errors.log
+
+# 移除原有的 ENTRYPOINT 和 CMD
+# 替換為以下單一 ENTRYPOINT
+
+# 設置 ENTRYPOINT，讓 Shell 執行 Conda 環境中的 Python 腳本並處理重定向
+ENTRYPOINT [ "/bin/bash", "-c", "/opt/conda/envs/hummingbot/bin/python bin/hummingbot_quickstart.py 2>> logs/errors.log" ]
