@@ -1,6 +1,7 @@
 import asyncio
 import time
 from decimal import Decimal
+import decimal
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
@@ -39,19 +40,27 @@ class KucoinPerpetualAPIOrderBookDataSource(PerpetualAPIOrderBookDataSource):
     async def get_last_traded_prices(self, trading_pairs: List[str], domain: Optional[str] = None) -> Dict[str, float]:
         return await self._connector.get_last_traded_prices(trading_pairs=trading_pairs)
 
-    async def get_funding_info(self, trading_pair: str) -> FundingInfo:
-        funding_info_response = await self._request_complete_funding_info(trading_pair)
-        if "symbol" in funding_info_response["data"]:
-            symbol_info = funding_info_response["data"]
-        else:
-            symbol_info = funding_info_response["data"][0]
-        funding_info = FundingInfo(
-            trading_pair=trading_pair,
-            index_price=Decimal(str(symbol_info["indexPrice"])),
-            mark_price=Decimal(str(symbol_info["markPrice"])),
-            next_funding_utc_timestamp=int(pd.Timestamp(symbol_info["nextFundingRateTime"]).timestamp()),
-            rate=Decimal(str(symbol_info["predictedFundingFeeRate"])),
-        )
+    async def get_funding_info(self, trading_pair: str) -> FundingInfo:  
+        funding_info_response = await self._request_complete_funding_info(trading_pair)  
+        if "symbol" in funding_info_response["data"]:  
+            symbol_info = funding_info_response["data"]  
+        else:  
+            symbol_info = funding_info_response["data"][0]  
+        
+        # 添加错误处理  
+        try:  
+            predicted_rate = Decimal(str(symbol_info["predictedFundingFeeRate"]))  
+        except (ValueError, decimal.InvalidOperation):  
+            # 如果预测费率无效,使用当前费率作为后备  
+            predicted_rate = Decimal(str(symbol_info.get("fundingFeeRate", "0")))  
+        
+        funding_info = FundingInfo(  
+            trading_pair=trading_pair,  
+            index_price=Decimal(str(symbol_info["indexPrice"])),  
+            mark_price=Decimal(str(symbol_info["markPrice"])),  
+            next_funding_utc_timestamp=int(pd.Timestamp(symbol_info["nextFundingRateTime"]).timestamp()),  
+            rate=predicted_rate,  
+        )  
         return funding_info
 
     async def _subscribe_channels(self, ws: WSAssistant):
