@@ -36,8 +36,8 @@ chmod +x deploy.sh
 bash deploy.sh
 
 # 或者手動構建
-docker build -t yourusername/hummingbot-adaptive:latest .
-docker push yourusername/hummingbot-adaptive:latest
+docker build -t skywalker0803r/hummingbot-adaptive:latest .
+docker push skywalker0803r/hummingbot-adaptive:latest
 ```
 
 ### 步驟 4: 在 GCP VM 部署
