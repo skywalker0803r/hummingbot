@@ -872,3 +872,5 @@ GCP 提供 Spot VM (可搶占實例),價格便宜 60-91%,但可能隨時被終�
 Wiki pages you might want to explore:
 
 Setup and Deployment (hummingbot/hummingbot)
+
+使用模型acli rovodev
