@@ -269,6 +269,46 @@ class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
             "prompt": "Should the strategy wait to receive a confirmation for orders cancellation before creating a new set of orders? (Yes/No)",
         }
     )
+    # Adaptive Gamma Learner Parameters
+    adaptive_gamma_learning_rate: Decimal = Field(
+        default=Decimal("0.01"),
+        description="Learning rate for the adaptive gamma learner.",
+        gt=0,
+        le=1,
+        json_schema_extra={"prompt": "Enter the learning rate for adaptive gamma (0.001 to 1.0)"},
+    )
+    adaptive_gamma_min: Decimal = Field(
+        default=Decimal("0.1"),
+        description="Minimum gamma value for the adaptive learner.",
+        gt=0,
+        json_schema_extra={"prompt": "Enter the minimum gamma value for adaptive learning"},
+    )
+    adaptive_gamma_max: Decimal = Field(
+        default=Decimal("10.0"),
+        description="Maximum gamma value for the adaptive learner.",
+        gt=0,
+        json_schema_extra={"prompt": "Enter the maximum gamma value for adaptive learning"},
+    )
+    adaptive_gamma_initial: Decimal = Field(
+        default=Decimal("1.0"),
+        description="Initial gamma value for the adaptive learner.",
+        gt=0,
+        json_schema_extra={"prompt": "Enter the initial gamma value for adaptive learning"},
+    )
+    adaptive_gamma_reward_window: int = Field(
+        default=100,
+        description="The number of ticks used for reward calculation in adaptive gamma learning.",
+        ge=10,
+        le=1000,
+        json_schema_extra={"prompt": "Enter the reward window size for adaptive gamma learning (10-1000)"},
+    )
+    adaptive_gamma_update_frequency: int = Field(
+        default=10,
+        description="How often (in ticks) to update the gamma value in adaptive learning.",
+        ge=1,
+        le=100,
+        json_schema_extra={"prompt": "Enter the update frequency for adaptive gamma learning (1-100 ticks)"},
+    )
     model_config = ConfigDict(title="avellaneda_market_making")
 
     # === prompts ===
@@ -422,9 +462,57 @@ class AvellanedaMarketMakingConfigMap(BaseTradingStrategyConfigMap):
             raise ValueError(ret)
         return v
 
+    @field_validator("adaptive_gamma_learning_rate", mode="before")
+    @classmethod
+    def validate_learning_rate(cls, v: str):
+        """Used for client-friendly error output."""
+        ret = validate_decimal(v, min_value=Decimal("0"), max_value=Decimal("1"), inclusive=False)
+        if ret is not None:
+            raise ValueError(ret)
+        return v
+
+    @field_validator(
+        "adaptive_gamma_min",
+        "adaptive_gamma_max", 
+        "adaptive_gamma_initial",
+        mode="before")
+    @classmethod
+    def validate_gamma_values(cls, v: str):
+        """Used for client-friendly error output."""
+        ret = validate_decimal(v, min_value=Decimal("0"), inclusive=False)
+        if ret is not None:
+            raise ValueError(ret)
+        return v
+
+    @field_validator("adaptive_gamma_reward_window", mode="before")
+    @classmethod
+    def validate_reward_window(cls, v: str):
+        """Used for client-friendly error output."""
+        ret = validate_int(v, min_value=10, max_value=1000)
+        if ret is not None:
+            raise ValueError(ret)
+        return v
+
+    @field_validator("adaptive_gamma_update_frequency", mode="before")
+    @classmethod
+    def validate_update_frequency(cls, v: str):
+        """Used for client-friendly error output."""
+        ret = validate_int(v, min_value=1, max_value=100)
+        if ret is not None:
+            raise ValueError(ret)
+        return v
+
     # === post-validations ===
 
     @model_validator(mode="after")
     def post_validations(self):
         required_exchanges.add(self.exchange)
+        
+        # Validate gamma parameter relationships
+        if self.adaptive_gamma_min >= self.adaptive_gamma_max:
+            raise ValueError("adaptive_gamma_min must be less than adaptive_gamma_max")
+        
+        if not (self.adaptive_gamma_min <= self.adaptive_gamma_initial <= self.adaptive_gamma_max):
+            raise ValueError("adaptive_gamma_initial must be between adaptive_gamma_min and adaptive_gamma_max")
+        
         return self

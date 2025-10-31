@@ -148,17 +148,25 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
             if isinstance(self._config_map.risk_factor, str):
                 if self._config_map.risk_factor.lower() == "adaptive":
                     self._gamma_learner = OnlineGammaLearner(
-                        initial_gamma=1.0,
-                        learning_rate=0.01,
-                        gamma_min=0.1,
-                        gamma_max=10.0
+                        initial_gamma=float(self._config_map.adaptive_gamma_initial),
+                        learning_rate=float(self._config_map.adaptive_gamma_learning_rate),
+                        gamma_min=float(self._config_map.adaptive_gamma_min),
+                        gamma_max=float(self._config_map.adaptive_gamma_max),
+                        reward_window=self._config_map.adaptive_gamma_reward_window,
+                        update_frequency=self._config_map.adaptive_gamma_update_frequency
                     )
                     self._use_adaptive_gamma = True
-                    self.logger().info("Adaptive gamma learning enabled with OnlineGammaLearner")
+                    self.logger().info(f"Adaptive gamma learning enabled with OnlineGammaLearner - "
+                                     f"initial: {self._config_map.adaptive_gamma_initial}, "
+                                     f"lr: {self._config_map.adaptive_gamma_learning_rate}, "
+                                     f"range: [{self._config_map.adaptive_gamma_min}, {self._config_map.adaptive_gamma_max}]")
                 elif self._config_map.risk_factor.lower() == "simple_adaptive":
-                    self._gamma_learner = SimpleGammaScheduler(base_gamma=1.0)
+                    self._gamma_learner = SimpleGammaScheduler(
+                        base_gamma=float(self._config_map.adaptive_gamma_initial)
+                    )
                     self._use_adaptive_gamma = True
-                    self.logger().info("Adaptive gamma learning enabled with SimpleGammaScheduler")
+                    self.logger().info(f"Adaptive gamma learning enabled with SimpleGammaScheduler - "
+                                     f"base_gamma: {self._config_map.adaptive_gamma_initial}")
                 else:
                     self._use_adaptive_gamma = False
             else:
