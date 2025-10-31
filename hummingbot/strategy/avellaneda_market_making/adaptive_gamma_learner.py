@@ -17,7 +17,7 @@ class OnlineGammaLearner:
     """
     
     def __init__(self, 
-                 initial_gamma: float = 1.0,
+                 initial_gamma: float = 0.9,
                  learning_rate: float = 0.1,
                  gamma_min: float = 0.1,
                  gamma_max: float = 10.0,
