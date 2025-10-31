@@ -44,7 +44,7 @@ mkdir -p conf conf/connectors conf/strategies conf/controllers conf/scripts logs
 
 # 下載 docker-compose.prod.yml
 echo "📥 下載配置文件..."
-cat > docker-compose.yml << EOF
+cat > docker-compose.prod.yml << EOF
 services:
   hummingbot:
     container_name: hummingbot
@@ -78,12 +78,12 @@ docker pull ${DOCKER_USERNAME}/${IMAGE_NAME}:${TAG}
 # 停止舊容器（如果存在）
 if [ "$(docker ps -aq -f name=hummingbot)" ]; then
     echo "🛑 停止舊容器..."
-    docker compose down
+    docker compose -f docker-compose.prod.yml down
 fi
 
 # 啟動 Hummingbot
 echo "🚀 啟動 Hummingbot..."
-docker compose up -d
+docker compose -f docker-compose.prod.yml up -d
 
 echo ""
 echo "✅ 部署完成！"
@@ -92,8 +92,8 @@ echo "📋 管理命令:"
 echo "  查看狀態: docker ps"
 echo "  查看日誌: docker logs -f hummingbot"
 echo "  進入容器: docker attach hummingbot"
-echo "  停止服務: docker compose down"
-echo "  重啟服務: docker compose restart"
+echo "  停止服務: docker compose -f docker-compose.prod.yml down"
+echo "  重啟服務: docker compose -f docker-compose.prod.yml restart"
 echo ""
 echo "📁 工作目錄: $WORK_DIR"
 echo "⚙️  配置目錄: $WORK_DIR/conf"
