@@ -25,6 +25,7 @@ async def start(self):
         stop_loss_spread = c_map.get("stop_loss_spread").value / Decimal('100')
         time_between_stop_loss_orders = c_map.get("time_between_stop_loss_orders").value
         stop_loss_slippage_buffer = c_map.get("stop_loss_slippage_buffer").value / Decimal('100')
+        stop_loss_use_maker_orders = c_map.get("stop_loss_use_maker_orders").value
         minimum_spread = c_map.get("minimum_spread").value / Decimal('100')
         price_ceiling = c_map.get("price_ceiling").value
         price_floor = c_map.get("price_floor").value
@@ -83,6 +84,7 @@ async def start(self):
             stop_loss_spread=stop_loss_spread,
             time_between_stop_loss_orders=time_between_stop_loss_orders,
             stop_loss_slippage_buffer=stop_loss_slippage_buffer,
+            stop_loss_use_maker_orders=stop_loss_use_maker_orders,
             order_levels=order_levels,
             order_level_spread=order_level_spread,
             order_level_amount=order_level_amount,

@@ -209,6 +209,12 @@ perpetual_market_making_config_map = {
                   default=Decimal("0.5"),
                   validator=lambda v: validate_decimal(v, 0, inclusive=True),
                   prompt_on_new=True),
+    "stop_loss_use_maker_orders":
+        ConfigVar(key="stop_loss_use_maker_orders",
+                  prompt="Do you want to use maker orders for stop loss? (Yes/No) >>> ",
+                  type_str="bool",
+                  default=False,
+                  validator=validate_bool),
     "price_ceiling":
         ConfigVar(key="price_ceiling",
                   prompt="Enter the price point above which only sell orders will be placed "
