@@ -1,0 +1,70 @@
+策略配置 (Strategy Configurations):
+strategy: perpetual_market_making
+
+derivative: kucoin_perpetual
+
+market: ETH-USDT
+
+leverage: 10
+
+position_mode: One-way
+
+bid_spread: 0.03
+
+ask_spread: 0.03
+
+minimum_spread: 0.01
+
+order_refresh_time: 5
+
+order_refresh_tolerance_pct: 0.1
+
+order_amount: 0.1
+
+long_profit_taking_spread: 0.03
+
+short_profit_taking_spread: 0.03
+
+stop_loss_spread: 2
+
+time_between_stop_loss_orders: 60
+
+stop_loss_slippage_buffer: 0.5
+
+stop_loss_use_maker_orders: False
+
+stop_loss_maker_timeout: 60
+
+stop_loss_auto_fallback: True
+
+price_ceiling: -1
+
+price_floor: -1
+
+order_levels: 3
+
+order_level_amount: 0
+
+order_level_spread: 0.02
+
+filled_order_delay: 15
+
+order_optimization_enabled: False
+
+ask_order_optimization_depth: 1
+
+bid_order_optimization_depth: 1
+
+price_source: current_market
+
+price_type: mid_price
+
+price_source_derivative: None
+
+price_source_market: None
+
+price_source_custom_api: None
+
+custom_api_update_interval: 5
+
+order_override: None
