@@ -62,6 +62,8 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                     time_between_stop_loss_orders: float,
                     stop_loss_slippage_buffer: Decimal,
                     stop_loss_use_maker_orders: bool = False,
+                    stop_loss_maker_timeout: float = 60.0,
+                    stop_loss_auto_fallback: bool = True,
                     order_levels: int = 1,
                     order_level_spread: Decimal = s_decimal_zero,
                     order_level_amount: Decimal = s_decimal_zero,
@@ -133,6 +135,8 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         self._time_between_stop_loss_orders = time_between_stop_loss_orders
         self._stop_loss_slippage_buffer = stop_loss_slippage_buffer
         self._stop_loss_use_maker_orders = stop_loss_use_maker_orders
+        self._stop_loss_maker_timeout = stop_loss_maker_timeout
+        self._stop_loss_auto_fallback = stop_loss_auto_fallback
 
         self._position_mode_ready = False
         self._position_mode_not_ready_counter = 0
@@ -585,6 +589,55 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
         time_since_stop_loss = self.current_timestamp - stop_loss_creation_timestamp
         return time_since_stop_loss >= self._time_between_stop_loss_orders
 
+    def _should_fallback_to_taker(self, stop_loss_orders: List[LimitOrder]) -> bool:
+        """檢查是否應該從 Maker 切換到 Taker"""
+        if not self._stop_loss_auto_fallback or not self._stop_loss_use_maker_orders:
+            return False
+            
+        for order in stop_loss_orders:
+            order_timestamp = self._exit_orders.get(order.client_order_id)
+            if order_timestamp:
+                order_age = self.current_timestamp - order_timestamp
+                if order_age > self._stop_loss_maker_timeout:
+                    self.logger().info(f"Stop loss maker order {order.client_order_id} timeout "
+                                     f"({order_age:.1f}s > {self._stop_loss_maker_timeout}s), "
+                                     f"switching to taker mode")
+                    return True
+        return False
+
+    def _create_taker_stop_loss_proposal(self, position: Position) -> Proposal:
+        """創建真正的 Market Taker 止損訂單"""
+        market: DerivativeBase = self._market_info.market
+        top_ask = market.get_price(self.trading_pair, True)
+        top_bid = market.get_price(self.trading_pair, False)
+        buys = []
+        sells = []
+        
+        stop_loss_price = position.entry_price * (Decimal("1") + self._stop_loss_spread) if position.amount < 0 \
+            else position.entry_price * (Decimal("1") - self._stop_loss_spread)
+        
+        if position.amount > 0:  # Long position - place market sell order
+            # 使用市價單立即執行
+            if top_ask <= stop_loss_price:
+                # 使用當前 ask 價格加上緩衝來確保立即成交
+                price = market.quantize_order_price(self.trading_pair, top_bid)
+                size = market.quantize_order_amount(self.trading_pair, abs(position.amount))
+                if size > 0:
+                    self.logger().info("Creating fallback market sell order to close long position")
+                    # 創建市價訂單
+                    sells.append(PriceSize(price, size, is_market_order=True))
+        elif position.amount < 0:  # Short position - place market buy order
+            if top_bid >= stop_loss_price:
+                # 使用當前 bid 價格加上緩衝來確保立即成交
+                price = market.quantize_order_price(self.trading_pair, top_ask)
+                size = market.quantize_order_amount(self.trading_pair, abs(position.amount))
+                if size > 0:
+                    self.logger().info("Creating fallback market buy order to close short position")
+                    # 創建市價訂單
+                    buys.append(PriceSize(price, size, is_market_order=True))
+        
+        return Proposal(buys, sells)
+
     def stop_loss_proposal(self, mode: PositionMode, active_positions: List[Position]) -> Proposal:
         market: DerivativeBase = self._market_info.market
         top_ask = market.get_price(self.trading_pair, False)
@@ -600,6 +653,19 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                                          if order.client_order_id in self._exit_orders.keys()
                                          and ((position.amount > 0 and not order.is_buy)
                                               or (position.amount < 0 and order.is_buy))]
+            
+            # 檢查是否需要從 Maker 切換到 Taker
+            if self._should_fallback_to_taker(existent_stop_loss_orders):
+                # 取消現有的 Maker 訂單
+                for order in existent_stop_loss_orders:
+                    self.cancel_order(self._market_info, order.client_order_id)
+                    self.logger().info(f"Cancelled timeout maker stop loss order {order.client_order_id}")
+                
+                # 創建 Taker 止損訂單
+                taker_proposal = self._create_taker_stop_loss_proposal(position)
+                buys.extend(taker_proposal.buys)
+                sells.extend(taker_proposal.sells)
+                continue  # 跳過後續的 Maker 邏輯
             if (not existent_stop_loss_orders
                     or (self._should_renew_stop_loss(existent_stop_loss_orders[0]))):
                 previous_stop_loss_price = None
@@ -1003,7 +1069,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 bid_order_id = self.buy_with_specific_market(
                     self._market_info,
                     buy.size,
-                    order_type=self._close_order_type,
+                    order_type=OrderType.MARKET if getattr(buy, 'is_market_order', False) else self._close_order_type,
                     price=buy.price,
                     position_action=position_action
                 )
@@ -1028,7 +1094,7 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                 ask_order_id = self.sell_with_specific_market(
                     self._market_info,
                     sell.size,
-                    order_type=self._close_order_type,
+                    order_type=OrderType.MARKET if getattr(sell, 'is_market_order', False) else self._close_order_type,
                     price=sell.price,
                     position_action=position_action
                 )

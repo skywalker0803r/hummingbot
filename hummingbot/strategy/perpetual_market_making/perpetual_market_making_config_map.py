@@ -215,6 +215,19 @@ perpetual_market_making_config_map = {
                   type_str="bool",
                   default=False,
                   validator=validate_bool),
+    "stop_loss_maker_timeout":
+        ConfigVar(key="stop_loss_maker_timeout",
+                  prompt="How long should maker stop loss orders wait before switching to taker mode? (in seconds) >>> ",
+                  type_str="float",
+                  default=60.0,
+                  validator=lambda v: validate_decimal(v, 1, inclusive=False),
+                  prompt_on_new=True),
+    "stop_loss_auto_fallback":
+        ConfigVar(key="stop_loss_auto_fallback",
+                  prompt="Should the strategy automatically fallback to taker orders if maker orders timeout? (Yes/No) >>> ",
+                  type_str="bool",
+                  default=True,
+                  validator=validate_bool),
     "price_ceiling":
         ConfigVar(key="price_ceiling",
                   prompt="Enter the price point above which only sell orders will be placed "

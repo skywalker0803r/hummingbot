@@ -37,12 +37,14 @@ class InventorySkewBidAskRatios(NamedTuple):
 
 
 class PriceSize:
-    def __init__(self, price: Decimal, size: Decimal):
+    def __init__(self, price: Decimal, size: Decimal, is_market_order: bool = False):
         self.price: Decimal = price
         self.size: Decimal = size
+        self.is_market_order: bool = is_market_order
 
     def __repr__(self):
-        return f"[ p: {self.price} s: {self.size} ]"
+        order_type = "MARKET" if self.is_market_order else "LIMIT"
+        return f"[ p: {self.price} s: {self.size} type: {order_type} ]"
 
 
 class Proposal:
