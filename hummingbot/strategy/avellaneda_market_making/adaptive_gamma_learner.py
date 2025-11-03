@@ -131,7 +131,8 @@ class OnlineGammaLearner:
     
     def _update_gamma(self):
         """
-        使用梯度估計更新 gamma
+        使用梯度估計更新 gamma（修正版）
+        修正：當獎勵下降且 gamma 趨勢上升時，會正確地降低 gamma
         """
         if len(self.reward_history) < 20:
             return
@@ -140,36 +141,40 @@ class OnlineGammaLearner:
         recent_rewards = list(self.reward_history)[-10:]
         current_avg_reward = np.mean(recent_rewards)
         
-        # 簡單的梯度估計：比較當前獎勵與基線
+        # 若歷史獎勵足夠，使用移動平均作為基線
         if len(self.reward_history) >= self.reward_window:
-            # 使用獎勵的移動平均作為基線
             baseline_rewards = list(self.reward_history)[:-10]
             self.baseline_reward = np.mean(baseline_rewards)
             
-            # 估計梯度
+            # 獎勵改善量
             reward_improvement = current_avg_reward - self.baseline_reward
             
-            # 簡單的策略梯度：如果獎勵提升，朝著當前方向調整
-            if abs(reward_improvement) > 1e-6:  # 避免數值問題
-                # 計算 gamma 變化的方向
+            if abs(reward_improvement) > 1e-6:  # 避免數值噪音
                 recent_gammas = list(self.gamma_history)[-10:]
-                gamma_trend = np.mean(np.diff(recent_gammas)) if len(recent_gammas) > 1 else 0
-                
-                # 如果獎勵提升且 gamma 在增加，繼續增加；反之亦然
-                if reward_improvement > 0:
-                    gradient_direction = np.sign(gamma_trend) if abs(gamma_trend) > 1e-6 else np.random.choice([-1, 1])
+                gamma_trend = np.mean(np.diff(recent_gammas)) if len(recent_gammas) > 1 else 0.0
+
+                # 修正方向判斷：
+                # reward_improvement 與 gamma_trend 同號 → 繼續同方向
+                # 反號 → 反轉方向
+                if abs(gamma_trend) > 1e-6:
+                    gradient_direction = np.sign(reward_improvement * gamma_trend)
                 else:
-                    gradient_direction = -np.sign(gamma_trend) if abs(gamma_trend) > 1e-6 else np.random.choice([-1, 1])
+                    # 若 gamma 幾乎沒動，就根據 reward_improvement 決定方向
+                    gradient_direction = np.sign(reward_improvement)
                 
-                # 更新 gamma
-                gamma_update = self.learning_rate * reward_improvement * gradient_direction
+                # 更新量取 reward_improvement 絕對值，方向由 gradient_direction 控制
+                gamma_update = self.learning_rate * abs(reward_improvement) * gradient_direction
                 self.gamma += gamma_update
                 
                 # 限制範圍
                 self.gamma = np.clip(self.gamma, self.gamma_min, self.gamma_max)
                 
-                self.logger.info(f"Gamma updated: {self.gamma:.6f}, reward_improvement: {reward_improvement:.6f}")
-    
+                self.logger.info(
+                    f"Gamma updated: {self.gamma:.6f}, "
+                    f"reward_improvement: {reward_improvement:.6f}, "
+                    f"direction: {gradient_direction:+.0f}"
+                )
+
     def get_current_gamma(self) -> Decimal:
         """獲取當前 gamma 值"""
         return Decimal(str(self.gamma))
