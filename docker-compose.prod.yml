@@ -1,7 +1,8 @@
 services:
   hummingbot:
     container_name: hummingbot
-    image: skywalker0803r/hummingbot-adaptive:latest  # 替換為您的 Docker Hub 用戶名
+    #image: skywalker0803r/hummingbot-adaptive:latest  # 替換為您的 Docker Hub 用戶名
+    build: .  # 改用 build 模式
     volumes:
       - ./conf:/home/hummingbot/conf
       - ./conf/connectors:/home/hummingbot/conf/connectors

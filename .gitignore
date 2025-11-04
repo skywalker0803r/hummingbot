@@ -3,7 +3,7 @@
 
 # .idea
 /.idea
-
+/topone-api-doc
 # CMake
 cmake-build-debug/
 
