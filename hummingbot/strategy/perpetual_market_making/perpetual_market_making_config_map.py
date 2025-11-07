@@ -103,6 +103,20 @@ def derivative_on_validated(value: str):
     required_exchanges.add(value)
 
 
+def validate_auto_optimize_params(value: str) -> Optional[str]:
+    """驗證自動參數優化設置"""
+    if value not in ["True", "False"]:
+        return "Auto optimize params must be True or False"
+
+
+def on_validate_auto_optimize_params(value: str):
+    """當啟用自動參數優化時，更新相關配置的行為"""
+    if value == "True":
+        # 當啟用自動優化時，這些參數將由算法計算，但仍需要初始值
+        logger_msg = "✅ 自動參數優化已啟用 - bid_spread, ask_spread, profit_taking_spread, stop_loss_spread 將自動計算"
+        # 注意：不能在這裡使用 logger，因為配置階段 logger 可能未初始化
+
+
 perpetual_market_making_config_map = {
     "strategy":
         ConfigVar(key="strategy",
@@ -132,6 +146,14 @@ perpetual_market_making_config_map = {
                   validator=validate_derivative_position_mode,
                   type_str="str",
                   default="One-way",
+                  prompt_on_new=True),
+    "auto_optimize_params":
+        ConfigVar(key="auto_optimize_params",
+                  prompt="Do you want to enable automatic parameter optimization based on market volatility? (Yes/No) >>> ",
+                  type_str="bool",
+                  default=False,
+                  validator=validate_bool,
+                  on_validated=on_validate_auto_optimize_params,
                   prompt_on_new=True),
     "bid_spread":
         ConfigVar(key="bid_spread",
@@ -340,4 +362,53 @@ perpetual_market_making_config_map = {
                   required_if=lambda: False,
                   default=None,
                   type_str="json"),
+    "auto_optimize_target_fill_prob":
+        ConfigVar(key="auto_optimize_target_fill_prob",
+                  prompt="Target order fill probability for auto optimization (Enter 0.25 for 25%) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="decimal",
+                  default=Decimal("0.25"),
+                  validator=lambda v: validate_decimal(v, 0.01, 0.99, inclusive=True)),
+    "auto_optimize_stop_loss_risk_prob":
+        ConfigVar(key="auto_optimize_stop_loss_risk_prob",
+                  prompt="Stop loss risk probability for auto optimization (Enter 0.01 for 1%) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="decimal",
+                  default=Decimal("0.01"),
+                  validator=lambda v: validate_decimal(v, 0.001, 0.1, inclusive=True)),
+    "auto_optimize_profit_factor":
+        ConfigVar(key="auto_optimize_profit_factor",
+                  prompt="Profit factor multiplier for auto optimization (Enter 2.5 for 2.5x) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="decimal",
+                  default=Decimal("2.5"),
+                  validator=lambda v: validate_decimal(v, 1.0, 10.0, inclusive=True)),
+    "auto_optimize_max_holding_days":
+        ConfigVar(key="auto_optimize_max_holding_days",
+                  prompt="Maximum holding time in days for auto optimization >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="decimal",
+                  default=Decimal("1.0"),
+                  validator=lambda v: validate_decimal(v, 0.1, 30.0, inclusive=True)),
+    "auto_optimize_data_source":
+        ConfigVar(key="auto_optimize_data_source",
+                  prompt="Data source for volatility calculation (gateio/current_market) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="str",
+                  default="gateio",
+                  validator=lambda v: None if v in ["gateio", "current_market"] else "Must be 'gateio' or 'current_market'"),
+    "auto_optimize_update_interval":
+        ConfigVar(key="auto_optimize_update_interval",
+                  prompt="How often to recalculate optimal parameters (in minutes) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="int",
+                  default=60,
+                  validator=lambda v: validate_int(v, min_value=5, max_value=1440)),
+    "auto_optimize_kline_interval":
+        ConfigVar(key="auto_optimize_kline_interval",
+                  prompt="K-line interval for volatility calculation (1m/5m/15m/1h/1d) >>> ",
+                  required_if=lambda: perpetual_market_making_config_map.get("auto_optimize_params").value,
+                  type_str="str",
+                  default="1m",
+                  validator=lambda v: None if v in ["1m", "5m", "15m", "30m", "1h", "4h", "1d"] else "Must be one of: 1m, 5m, 15m, 30m, 1h, 4h, 1d"),
 }

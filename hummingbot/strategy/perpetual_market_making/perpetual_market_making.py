@@ -140,9 +140,100 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
 
         self._position_mode_ready = False
         self._position_mode_not_ready_counter = 0
+        
+        # 自動參數優化相關屬性
+        self._auto_optimize_enabled = False
+        self._auto_optimize_calculator = None
+        self._auto_optimize_last_update = 0
+        self._auto_optimize_update_interval = 3600  # 預設 60 分鐘
+        self._auto_optimize_config = {}
+        self._original_spreads = {
+            "bid_spread": bid_spread,
+            "ask_spread": ask_spread,
+            "long_profit_taking_spread": long_profit_taking_spread,
+            "short_profit_taking_spread": short_profit_taking_spread,
+            "stop_loss_spread": stop_loss_spread
+        }
 
     def all_markets_ready(self):
         return all([market.ready for market in self.active_markets])
+    
+    def enable_auto_optimize(self, 
+                           calculator, 
+                           update_interval_minutes: int = 60,
+                           config: dict = None):
+        """
+        啟用自動參數優化
+        
+        Args:
+            calculator: OptimalParamsCalculator 實例
+            update_interval_minutes: 更新間隔（分鐘）
+            config: 優化配置參數
+        """
+        self._auto_optimize_enabled = True
+        self._auto_optimize_calculator = calculator
+        self._auto_optimize_update_interval = update_interval_minutes * 60  # 轉換為秒
+        self._auto_optimize_config = config or {}
+        self.logger().info(f"✅ 自動參數優化已啟用，更新間隔: {update_interval_minutes} 分鐘")
+    
+    def disable_auto_optimize(self):
+        """停用自動參數優化，恢復到原始參數"""
+        if self._auto_optimize_enabled:
+            self._auto_optimize_enabled = False
+            self._bid_spread = self._original_spreads["bid_spread"]
+            self._ask_spread = self._original_spreads["ask_spread"]
+            self._long_profit_taking_spread = self._original_spreads["long_profit_taking_spread"]
+            self._short_profit_taking_spread = self._original_spreads["short_profit_taking_spread"]
+            self._stop_loss_spread = self._original_spreads["stop_loss_spread"]
+            self.logger().info("🔄 自動參數優化已停用，已恢復原始參數")
+    
+    def update_optimal_params(self):
+        """
+        更新最優參數
+        """
+        if not self._auto_optimize_enabled or not self._auto_optimize_calculator:
+            return
+            
+        try:
+            current_time = self.current_timestamp
+            if current_time - self._auto_optimize_last_update < self._auto_optimize_update_interval:
+                return
+                
+            # 獲取交易對
+            trading_pair = self._market_info.trading_pair
+            gateio_pair = trading_pair.replace("-", "_")
+            
+            # 計算最優參數
+            optimal_params = self._auto_optimize_calculator.calculate_from_gateio(
+                currency_pair=gateio_pair,
+                **self._auto_optimize_config
+            )
+            
+            # 更新參數
+            old_bid_spread = self._bid_spread
+            old_ask_spread = self._ask_spread
+            
+            self._bid_spread = optimal_params["bid_spread"] / Decimal('100')
+            self._ask_spread = optimal_params["ask_spread"] / Decimal('100')
+            self._long_profit_taking_spread = optimal_params["long_profit_taking_spread"] / Decimal('100')
+            self._short_profit_taking_spread = optimal_params["short_profit_taking_spread"] / Decimal('100')
+            self._stop_loss_spread = optimal_params["stop_loss_spread"] / Decimal('100')
+            
+            self._auto_optimize_last_update = current_time
+            
+            # 記錄參數變化
+            if abs(old_bid_spread - self._bid_spread) > Decimal('0.0001') or abs(old_ask_spread - self._ask_spread) > Decimal('0.0001'):
+                self.logger().info(f"🔄 參數已更新:")
+                self.logger().info(f"   📈 Bid Spread: {old_bid_spread*100:.4f}% → {self._bid_spread*100:.4f}%")
+                self.logger().info(f"   📉 Ask Spread: {old_ask_spread*100:.4f}% → {self._ask_spread*100:.4f}%")
+                self.logger().info(f"   💰 Long Profit Taking: {self._long_profit_taking_spread*100:.4f}%")
+                self.logger().info(f"   💰 Short Profit Taking: {self._short_profit_taking_spread*100:.4f}%")
+                self.logger().info(f"   🛑 Stop Loss: {self._stop_loss_spread*100:.4f}%")
+                self.logger().info(f"   📊 波動率: {optimal_params['daily_volatility_pct']:.2f}%")
+                
+        except Exception as e:
+            self.logger().error(f"❌ 自動參數優化更新失敗: {e}")
+            # 發生錯誤時不改變當前參數，繼續使用上次的設定
 
     @property
     def order_refresh_tolerance_pct(self) -> Decimal:
@@ -482,6 +573,9 @@ class PerpetualMarketMakingStrategy(StrategyPyBase):
                     if should_report_warnings:
                         self.logger().warning("Markets are not ready. No market making trades are permitted.")
                     return
+            
+            # 🔄 檢查並更新自動參數優化
+            self.update_optimal_params()
 
             if should_report_warnings:
                 if not all([market.network_status is NetworkStatus.CONNECTED for market in self.active_markets]):
