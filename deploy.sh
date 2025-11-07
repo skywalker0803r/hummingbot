@@ -25,12 +25,12 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
-echo "🔧 檢查 Docker Hub 登入狀態..."
-if ! docker system info | grep -q "Username:"; then
-    echo "⚠️  請先登入 Docker Hub:"
-    echo "   docker login"
-    exit 1
-fi
+#echo "🔧 檢查 Docker Hub 登入狀態..."
+#if ! docker system info | grep -q "Username:"; then
+#    echo "⚠️  請先登入 Docker Hub:"
+#    echo "   docker login"
+#    exit 1
+#fi
 
 # 構建鏡像
 echo "🏗️  構建鏡像..."
