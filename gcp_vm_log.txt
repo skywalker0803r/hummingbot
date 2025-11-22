@@ -1,0 +1,6 @@
+>>> create
+
+Enter the strategy name (e.g., market making, arbitrage): >>> avellaneda_perpetual_making
+Please see https://docs.hummingbot.org/strategies/avellaneda-perpetual-making/ while setting up these below configuration.
+
+Enter a new file name for your configuration >>> conf_avellaneda_perpetual_making_DGRAM.yml
