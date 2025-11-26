@@ -46,7 +46,7 @@ from hummingbot.strategy.order_tracker import OrderTracker
 
 # Import Avellaneda adaptive gamma components
 try:
-    from hummingbot.strategy.avellaneda_market_making.adaptive_gamma_learner import (
+    from hummingbot.strategy.avellaneda_perpetual_making.adaptive_gamma_learner import (
         OnlineGammaLearner, 
         SimpleGammaScheduler
     )
@@ -62,15 +62,8 @@ s_decimal_neg_one = Decimal(-1)
 s_decimal_one = Decimal(1)
 
 
-# Import data types from separate module
-from hummingbot.strategy.avellaneda_perpetual_making.data_types import (
-    PriceSize, 
-    Proposal, 
-    AvellanedaParams, 
-    MarketState, 
-    OptimalPrices,
-    StrategyState
-)
+# Data types for Avellaneda strategy
+from hummingbot.strategy.data_types import PriceSize, Proposal
 
 
 class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
