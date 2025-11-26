@@ -151,6 +151,10 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._position_mode_ready = False
         self._position_mode_not_ready_counter = 0
         self._last_own_trade_price = Decimal("0")
+        
+        # Order management timing
+        self._last_order_cancel_timestamp = 0
+        self._order_cancel_wait_time = 2.0  # Wait 2 seconds after cancelling orders
 
     def init_params(self,
                     market_info: MarketTradingPairTuple,
@@ -670,10 +674,18 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
 
     def cancel_active_orders(self, proposal: Proposal = None):
         """Cancel orders that need refreshing"""
+        orders_to_cancel = []
         for order in self.active_orders[:]:
             age = self.current_timestamp - order.creation_timestamp
             if age >= self._order_refresh_time:
-                self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
+                orders_to_cancel.append(order)
+        
+        # Cancel all old orders
+        for order in orders_to_cancel:
+            self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
+        
+        # Return whether any orders were cancelled
+        return len(orders_to_cancel) > 0
 
     def start(self, clock: Clock, timestamp: float):
         """Strategy start"""
@@ -723,13 +735,19 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # Calculate optimal prices using Avellaneda model
             self.calculate_reservation_price_and_optimal_spread()
             
-            # Create and execute proposal
-            proposal = self.create_base_proposal()
-            self.apply_budget_constraint(proposal)
-            self.cancel_active_orders()
+            # Cancel old orders first
+            orders_cancelled = self.cancel_active_orders()
+            if orders_cancelled:
+                self._last_order_cancel_timestamp = timestamp
             
-            if proposal.buys or proposal.sells:
-                self._execute_orders_proposal(proposal, PositionAction.OPEN)
+            # Create and execute proposal only if no active orders and enough time has passed since last cancel
+            time_since_cancel = timestamp - self._last_order_cancel_timestamp
+            if not self.active_orders and time_since_cancel >= self._order_cancel_wait_time:
+                proposal = self.create_base_proposal()
+                self.apply_budget_constraint(proposal)
+                
+                if proposal.buys or proposal.sells:
+                    self._execute_orders_proposal(proposal, PositionAction.OPEN)
         else:
             # Have positions - manage them
             self.manage_positions(session_positions)
