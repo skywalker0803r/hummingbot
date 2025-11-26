@@ -643,22 +643,24 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             if position.amount > 0:  # Long position
                 stop_loss_price = position.entry_price * (Decimal("1") - self._stop_loss_spread)
                 if bid_price <= stop_loss_price:  # Stop loss triggered
-                    # Create market sell order
-                    price = market.quantize_order_price(self._market_info.trading_pair, 
-                                                       stop_loss_price * (Decimal("1") - self._stop_loss_slippage_buffer))
+                    # CRITICAL FIX: Stop-loss should use MARKET orders for immediate execution
+                    # Use current bid price with slippage buffer to ensure market order execution
                     size = market.quantize_order_amount(self._market_info.trading_pair, abs(position.amount))
-                    if price > 0 and size > 0:
-                        sells.append(PriceSize(price, size))
+                    if size > 0:
+                        # For market orders, price can be 0 or current market price
+                        # The _execute_orders_proposal will handle OrderType.MARKET correctly
+                        sells.append(PriceSize(Decimal("0"), size))  # Market order indicator
             
             elif position.amount < 0:  # Short position  
                 stop_loss_price = position.entry_price * (Decimal("1") + self._stop_loss_spread)
                 if ask_price >= stop_loss_price:  # Stop loss triggered
-                    # Create market buy order
-                    price = market.quantize_order_price(self._market_info.trading_pair,
-                                                       stop_loss_price * (Decimal("1") + self._stop_loss_slippage_buffer))
+                    # CRITICAL FIX: Stop-loss should use MARKET orders for immediate execution
+                    # Use current ask price with slippage buffer to ensure market order execution
                     size = market.quantize_order_amount(self._market_info.trading_pair, abs(position.amount))
-                    if price > 0 and size > 0:
-                        buys.append(PriceSize(price, size))
+                    if size > 0:
+                        # For market orders, price can be 0 or current market price
+                        # The _execute_orders_proposal will handle OrderType.MARKET correctly
+                        buys.append(PriceSize(Decimal("0"), size))  # Market order indicator
         
         return Proposal(buys, sells)
 
@@ -691,14 +693,37 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self._exit_orders[order_id] = self.current_timestamp
 
     def cancel_active_orders(self, proposal: Proposal = None):
-        """Cancel orders that need refreshing"""
+        """Cancel orders that need refreshing or have stale prices"""
         orders_to_cancel = []
+        
         for order in self.active_orders[:]:
+            should_cancel = False
+            
+            # 1. Cancel by age (existing logic)
             age = self.current_timestamp - order.creation_timestamp
             if age >= self._order_refresh_time:
+                should_cancel = True
+            
+            # 2. CRITICAL FIX: Cancel by price deviation to prevent stale quotes
+            elif proposal is not None and self._optimal_bid > 0 and self._optimal_ask > 0:
+                # Check if current optimal prices differ significantly from active order prices
+                if order.is_buy:
+                    # For buy orders, check against optimal bid
+                    price_deviation_pct = abs(order.price - self._optimal_bid) / self._optimal_bid * 100
+                    if price_deviation_pct > float(self._order_refresh_tolerance_pct):
+                        should_cancel = True
+                        self.logger().debug(f"🔄 Cancelling buy order due to price deviation: {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%")
+                else:
+                    # For sell orders, check against optimal ask
+                    price_deviation_pct = abs(order.price - self._optimal_ask) / self._optimal_ask * 100
+                    if price_deviation_pct > float(self._order_refresh_tolerance_pct):
+                        should_cancel = True
+                        self.logger().debug(f"🔄 Cancelling sell order due to price deviation: {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%")
+            
+            if should_cancel:
                 orders_to_cancel.append(order)
         
-        # Cancel all old orders
+        # Cancel all orders that need cancelling
         for order in orders_to_cancel:
             self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
         
@@ -770,8 +795,9 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 # Set next creation time to avoid immediate re-creation
                 self._create_timestamp = timestamp + self._order_refresh_time
         else:
-            # Have positions - manage them
-            self.manage_positions(session_positions)
+            # Have positions - manage them (with exit order protection)
+            if not self._has_pending_exit_orders():
+                self.manage_positions(session_positions)
 
         self._last_timestamp = timestamp
 
@@ -822,8 +848,44 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         if not (proposal.buys or proposal.sells):
             return False
         
-        # Most important: don't create orders if we already have active orders
-        if len(self.active_orders) > 0:
+        # Check timing constraints
+        if self._create_timestamp > self.current_timestamp:
+            return False
+            
+        if self._cancel_timestamp > self.current_timestamp:
+            return False
+
+        # Identify what we currently have
+        existing_buy_orders = [o for o in self.active_orders if o.is_buy]
+        existing_sell_orders = [o for o in self.active_orders if not o.is_buy]
+        
+        # LOGIC ADJUSTMENT:
+        # Instead of blocking new orders if old ones exist, we only block if we are ALREADY
+        # fully covered on that side. The logic to CANCEL the old "bad price" orders 
+        # is handled by cancel_active_orders() which runs BEFORE this function.
+        #
+        # However, if cancel_active_orders didn't cancel them (because they are not old enough),
+        # but the price moved significantly, we might want to allow creating new ones (layering)
+        # or block. For a simple MM, blocking while orders exist is safer to prevent over-trading,
+        # BUT we must ensure we don't end up with stale orders forever.
+        
+        # If we have recently cancelled orders (latency gap), active_orders might still show them.
+        # We'll trust the logic that if we have orders, we don't create new ones UNLESS
+        # the proposal is for a side we are missing.
+
+        proposal_has_buys = len(proposal.buys) > 0
+        proposal_has_sells = len(proposal.sells) > 0
+
+        # If we already have buys, remove buys from proposal (prevent layering for now)
+        if existing_buy_orders and proposal_has_buys:
+            proposal.buys = []
+            
+        # If we already have sells, remove sells from proposal
+        if existing_sell_orders and proposal_has_sells:
+            proposal.sells = []
+            
+        # If proposal is empty after filtering, stop
+        if not (proposal.buys or proposal.sells):
             return False
         
         # Check timing constraints - must pass create timestamp
@@ -844,6 +906,33 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 return False
         
         return True
+    
+    def _has_pending_exit_orders(self) -> bool:
+        """
+        CRITICAL FIX: Check if there are pending exit orders to prevent double spending
+        
+        Fixed Logic: deeply trusts self._exit_orders. If we sent an order recently, 
+        we assume it's pending regardless of whether it appears in active_orders yet.
+        
+        This prevents race condition where WebSocket hasn't updated active_orders yet
+        but we've already sent an exit order.
+        """
+        current_time = self.current_timestamp
+        
+        # 1. Clean up expired exit order records (older than 10 seconds is enough for market orders)
+        # Market orders should fill instantly; if they linger > 10s, something is wrong, but we should clear the lock.
+        expired_orders = [order_id for order_id, timestamp in self._exit_orders.items() 
+                         if current_time - timestamp > 10.0]
+        
+        for order_id in expired_orders:
+            del self._exit_orders[order_id]
+            
+        # 2. Strict Check: If we have ANY record in _exit_orders, we block new exit proposals.
+        # We do NOT filter by active_orders because active_orders has latency.
+        if len(self._exit_orders) > 0:
+            return True
+        
+        return False
     
     def set_timers(self, next_cycle: float):
         """Set timing for next order cycle (following spot strategy pattern)"""
