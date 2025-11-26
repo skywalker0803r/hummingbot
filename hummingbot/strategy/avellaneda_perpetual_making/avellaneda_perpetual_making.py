@@ -234,6 +234,12 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._avg_vol = InstantVolatilityIndicator(sampling_length=volatility_buffer_size)
         self._ticks_to_be_ready = max(volatility_buffer_size, trading_intensity_buffer_size)
         
+        # Ensure minimum buffer sizes for stability
+        if volatility_buffer_size < 50:
+            self.logger().warning(f"⚠️  volatility_buffer_size ({volatility_buffer_size}) is too small for stable calculations. Recommended: ≥50")
+        if trading_intensity_buffer_size < 50:
+            self.logger().warning(f"⚠️  trading_intensity_buffer_size ({trading_intensity_buffer_size}) is too small for stable calculations. Recommended: ≥50")
+        
         # Initialize adaptive gamma if requested and available
         if adaptive_gamma_enabled and ADAPTIVE_GAMMA_AVAILABLE:
             self._initialize_adaptive_gamma(
@@ -786,8 +792,19 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
 
     def _is_algorithm_ready(self) -> bool:
         """Check if enough data has been collected"""
-        return (self._avg_vol.is_sampling_buffer_full and 
-                (self._trading_intensity is None or self._trading_intensity.is_sampling_buffer_full))
+        # Basic buffer readiness
+        buffers_ready = (self._avg_vol.is_sampling_buffer_full and 
+                        (self._trading_intensity is None or self._trading_intensity.is_sampling_buffer_full))
+        
+        # Additional stability check: ensure we have realistic volatility
+        if buffers_ready and self._avg_vol.current_value is not None:
+            volatility = self._avg_vol.current_value
+            # Volatility should be between 0.001% and 50% (realistic range)
+            if volatility < 0.00001 or volatility > 0.5:
+                self.logger().warning(f"⚠️  Unrealistic volatility detected: {volatility:.6f}. Waiting for more stable data...")
+                return False
+        
+        return buffers_ready
     
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
@@ -808,6 +825,21 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         
         if self._create_timestamp > self.current_timestamp:
             return False
+        
+        # Additional safety check: don't create orders if we already have orders
+        if len(self.active_orders) > 0:
+            return False
+        
+        # Safety check: ensure reasonable prices
+        if proposal.buys:
+            for buy in proposal.buys:
+                if buy.price <= 0 or buy.size <= 0:
+                    return False
+        
+        if proposal.sells:
+            for sell in proposal.sells:
+                if sell.price <= 0 or sell.size <= 0:
+                    return False
         
         return True
     
