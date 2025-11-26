@@ -6,6 +6,7 @@ market making strategy for perpetual futures trading.
 """
 
 import os.path
+from decimal import Decimal
 from typing import List, Tuple
 
 import pandas as pd
@@ -80,7 +81,7 @@ async def start(self):
             adaptive_gamma_max = getattr(c_map, 'adaptive_gamma_max', 10.0)
             adaptive_gamma_reward_window = getattr(c_map, 'adaptive_gamma_reward_window', 100)
             adaptive_gamma_update_frequency = getattr(c_map, 'adaptive_gamma_update_frequency', 10)
-            risk_factor_value = float(risk_factor)
+            risk_factor_value = risk_factor if hasattr(risk_factor, 'quantize') else Decimal(str(risk_factor))
         
         # Initialize strategy parameters
         strategy.init_params(

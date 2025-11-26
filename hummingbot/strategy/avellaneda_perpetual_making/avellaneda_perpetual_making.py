@@ -102,7 +102,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         # Avellaneda model parameters
         self._risk_factor = Decimal("1.0")  # γ (gamma) - risk aversion
         self._order_amount_shape_factor = Decimal("1.0")  # η (eta) - order shape factor
-        self._min_spread = Decimal("0.01")  # minimum spread percentage
+        self._min_spread = Decimal("0.001")  # minimum spread percentage (0.1%)
         self._volatility_buffer_size = 200  # number of ticks for volatility calculation
         self._trading_intensity_buffer_size = 200  # number of ticks for liquidity calculation
         
@@ -111,7 +111,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._inventory_target_base_pct = Decimal("50")  # 50% target allocation
         self._order_refresh_time = 30.0
         self._order_refresh_tolerance_pct = Decimal("1.0")
-        self._filled_order_delay = 15.0
+        self._filled_order_delay = 15.0  # Default value, will be overridden in init_params
         
         # Position management for perpetual futures
         self._leverage = 10
@@ -152,9 +152,6 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._position_mode_not_ready_counter = 0
         self._last_own_trade_price = Decimal("0")
         
-        # Order management timing (following spot strategy pattern)
-        self._cancel_timestamp = 0
-        self._create_timestamp = 0
 
     def init_params(self,
                     market_info: MarketTradingPairTuple,
@@ -323,8 +320,19 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         """
         Calculate inventory deviation from target
         
+        NOTE: This implementation uses VALUE-BASED inventory calculation for perpetual futures,
+        which differs from the traditional Avellaneda model that uses base asset quantities.
+        
+        Rationale for VALUE-BASED approach:
+        - Perpetual futures use leverage, making absolute position sizes less meaningful
+        - Total portfolio value better represents actual risk exposure
+        - Accounts for margin requirements and leverage effects
+        - More appropriate for leveraged derivative trading
+        
+        Formula: inventory_ratio = (quote_balance + position_value) / total_portfolio_value
+        
         Returns:
-            Decimal: Current inventory as ratio (0-1) where 0.5 = balanced
+            Decimal: Current inventory deviation from target (absolute difference)
         """
         try:
             market = self._market_info.market
@@ -656,12 +664,16 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
 
     def _execute_orders_proposal(self, proposal: Proposal, position_action: PositionAction):
         """Execute order proposals"""
+        # For stop-loss orders (CLOSE action), use market orders to ensure immediate execution
+        # For market making orders (OPEN action), use limit orders
+        order_type = OrderType.MARKET if position_action == PositionAction.CLOSE else OrderType.LIMIT
+        
         for buy in proposal.buys:
             order_id = self._market_info.market.buy(
                 trading_pair=self._market_info.trading_pair,
                 amount=buy.size,
-                order_type=OrderType.LIMIT,  # Always use limit orders for market making
-                price=buy.price,
+                order_type=order_type,
+                price=buy.price if order_type == OrderType.LIMIT else None,  # Market orders don't need price
                 position_action=position_action
             )
             if position_action == PositionAction.CLOSE:
@@ -671,8 +683,8 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             order_id = self._market_info.market.sell(
                 trading_pair=self._market_info.trading_pair,
                 amount=sell.size,
-                order_type=OrderType.LIMIT,  # Always use limit orders for market making
-                price=sell.price,
+                order_type=order_type,
+                price=sell.price if order_type == OrderType.LIMIT else None,  # Market orders don't need price
                 position_action=position_action
             )
             if position_action == PositionAction.CLOSE:
@@ -690,9 +702,9 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         for order in orders_to_cancel:
             self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
         
-        # Update cancel timestamp if orders were cancelled
+        # Update cancel timestamp if orders were cancelled - add delay
         if orders_to_cancel:
-            self._cancel_timestamp = self.current_timestamp
+            self._cancel_timestamp = self.current_timestamp + 2.0  # Wait 2 seconds after cancelling
         
         # Return whether any orders were cancelled
         return len(orders_to_cancel) > 0
@@ -745,25 +757,18 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # Calculate optimal prices using Avellaneda model
             self.calculate_reservation_price_and_optimal_spread()
             
-            # Trading is allowed only after create_timestamp
-            if self._create_timestamp <= timestamp:
-                # 1. Calculate reservation price and optimal spread
-                self.calculate_reservation_price_and_optimal_spread()
-                
-                # 2. Check if calculated prices make sense
-                if self._optimal_bid > 0 and self._optimal_ask > 0:
-                    # 3. Create base order proposals
-                    proposal = self.create_base_proposal()
-                    # 4. Apply budget constraint
-                    self.apply_budget_constraint(proposal)
-                    # 5. Cancel active orders (based on proposal and timing)
-                    self.cancel_active_orders(proposal)
+            # 2. Create base proposal 
+            proposal = self.create_base_proposal()
             
-            # 6. Create new orders only if timing allows
-            proposal = self.create_base_proposal() if self._create_timestamp <= timestamp else None
+            # 3. Cancel active orders if needed (based on timing and age)
+            self.cancel_active_orders(proposal)
+            
+            # 4. Create new orders only if timing and conditions allow
             if self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
                 self._execute_orders_proposal(proposal, PositionAction.OPEN)
+                # Set next creation time to avoid immediate re-creation
+                self._create_timestamp = timestamp + self._order_refresh_time
         else:
             # Have positions - manage them
             self.manage_positions(session_positions)
@@ -809,8 +814,6 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
         Determine if orders should be created based on timing and proposal validity
-        
-        Following spot strategy pattern for order timing management
         """
         if proposal is None:
             return False
@@ -819,27 +822,26 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         if not (proposal.buys or proposal.sells):
             return False
         
-        # Check timing constraints (following spot strategy pattern)
-        if self._cancel_timestamp > self.current_timestamp:
-            return False
-        
-        if self._create_timestamp > self.current_timestamp:
-            return False
-        
-        # Additional safety check: don't create orders if we already have orders
+        # Most important: don't create orders if we already have active orders
         if len(self.active_orders) > 0:
             return False
         
-        # Safety check: ensure reasonable prices
-        if proposal.buys:
-            for buy in proposal.buys:
-                if buy.price <= 0 or buy.size <= 0:
-                    return False
+        # Check timing constraints - must pass create timestamp
+        if self._create_timestamp > self.current_timestamp:
+            return False
         
-        if proposal.sells:
-            for sell in proposal.sells:
-                if sell.price <= 0 or sell.size <= 0:
-                    return False
+        # Don't create immediately after cancelling
+        if self._cancel_timestamp > self.current_timestamp:
+            return False
+        
+        # Safety check: ensure reasonable prices and sizes
+        for buy in proposal.buys:
+            if buy.price <= 0 or buy.size <= 0:
+                return False
+        
+        for sell in proposal.sells:
+            if sell.price <= 0 or sell.size <= 0:
+                return False
         
         return True
     

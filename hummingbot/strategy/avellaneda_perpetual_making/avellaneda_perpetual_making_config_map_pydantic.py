@@ -86,7 +86,7 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     )
     
     min_spread: Decimal = Field(
-        default=Decimal("0.1"),
+        default=Decimal("0.001"),
         description="Minimum spread percentage",
         ge=0,
         json_schema_extra={
