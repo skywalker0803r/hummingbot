@@ -285,23 +285,29 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     @classmethod
     def validate_derivative(cls, v: str):
         """Validate derivative exchange"""
-        derivative_connectors = [
-            "binance_perpetual", "kucoin_perpetual", "bybit_perpetual", 
-            "okx_perpetual", "gate_io_perpetual", "bitget_perpetual",
-            "hyperliquid_perpetual", "derive_perpetual", "dydx_v4_perpetual"
-        ]
-        
-        if v not in derivative_connectors:
-            raise ValueError(f"Connector {v} does not support perpetual futures trading")
+        from hummingbot.client.config.config_validators import validate_derivative
+        ret = validate_derivative(v)
+        if ret is not None:
+            raise ValueError(ret)
         return v
 
     @field_validator("market", mode="before")
     @classmethod
-    def validate_market(cls, v: str):
+    def validate_market(cls, v: str, info):
         """Validate market trading pair"""
-        ret = validate_market_trading_pair(v)
-        if ret is not None:
-            raise ValueError(ret)
+        # Get derivative from the context
+        if hasattr(info, 'data') and 'derivative' in info.data:
+            derivative = info.data['derivative']
+            ret = validate_market_trading_pair(derivative, v)
+            if ret is not None:
+                raise ValueError(ret)
+        # If derivative not available yet, just validate format
+        else:
+            if '-' not in v:
+                raise ValueError("Trading pair must be in BASE-QUOTE format (e.g., BTC-USDT)")
+            base, quote = v.split('-', 1)
+            if not base or not quote:
+                raise ValueError("Invalid trading pair format")
         return v
 
     @field_validator("position_mode", mode="before")
@@ -355,9 +361,11 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
         mode="before"
     )
     @classmethod
-    def validate_decimal_fields(cls, v: str):
+    def validate_decimal_fields(cls, v):
         """Used for client-friendly error output."""
-        ret = validate_decimal(v, min_value=Decimal("0"), inclusive=True)
+        # Convert to string for validation if it's not already
+        v_str = str(v)
+        ret = validate_decimal(v_str, min_value=Decimal("0"), inclusive=True)
         if ret is not None:
             raise ValueError(ret)
         return v
@@ -371,9 +379,11 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
         mode="before"
     )
     @classmethod
-    def validate_int_fields(cls, v: str):
+    def validate_int_fields(cls, v):
         """Used for client-friendly error output."""
-        ret = validate_int(v, min_value=1)
+        # Convert to string for validation if it's not already
+        v_str = str(v)
+        ret = validate_int(v_str, min_value=1)
         if ret is not None:
             raise ValueError(ret)
         return v
@@ -385,19 +395,19 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
         mode="before"
     )
     @classmethod
-    def validate_float_fields(cls, v: str):
+    def validate_float_fields(cls, v):
         """Used for client-friendly error output."""
         try:
             float_val = float(v)
             if float_val < 0:
                 raise ValueError("Value must be non-negative")
             return float_val
-        except:
+        except Exception:
             raise ValueError("Must be a valid number")
 
     @field_validator("adaptive_gamma_enabled", mode="before")
     @classmethod
-    def validate_bool(cls, v: str):
+    def validate_bool_field(cls, v):
         """Used for client-friendly error output."""
         if isinstance(v, str):
             ret = validate_bool(v)
