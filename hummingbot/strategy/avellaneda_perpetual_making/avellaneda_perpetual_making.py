@@ -150,6 +150,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._exit_orders = {}
         self._position_mode_ready = False
         self._position_mode_not_ready_counter = 0
+        self._last_own_trade_price = Decimal("0")
 
     def init_params(self,
                     market_info: MarketTradingPairTuple,
@@ -564,7 +565,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         
         for candidate in adjusted_candidates:
             price_size = PriceSize(candidate.price, candidate.amount)
-            if candidate.trade_type == TradeType.BUY:
+            if candidate.order_side == TradeType.BUY:
                 proposal.buys.append(price_size)
             else:
                 proposal.sells.append(price_size)
@@ -649,7 +650,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             order_id = self._market_info.market.buy(
                 trading_pair=self._market_info.trading_pair,
                 amount=buy.size,
-                order_type=OrderType.MARKET if buy.is_market_order else OrderType.LIMIT,
+                order_type=OrderType.LIMIT,  # Always use limit orders for market making
                 price=buy.price,
                 position_action=position_action
             )
@@ -660,7 +661,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             order_id = self._market_info.market.sell(
                 trading_pair=self._market_info.trading_pair,
                 amount=sell.size,
-                order_type=OrderType.MARKET if sell.is_market_order else OrderType.LIMIT,
+                order_type=OrderType.LIMIT,  # Always use limit orders for market making
                 price=sell.price,
                 position_action=position_action
             )
