@@ -152,9 +152,9 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._position_mode_not_ready_counter = 0
         self._last_own_trade_price = Decimal("0")
         
-        # Order management timing
-        self._last_order_cancel_timestamp = 0
-        self._order_cancel_wait_time = 2.0  # Wait 2 seconds after cancelling orders
+        # Order management timing (following spot strategy pattern)
+        self._cancel_timestamp = 0
+        self._create_timestamp = 0
 
     def init_params(self,
                     market_info: MarketTradingPairTuple,
@@ -684,6 +684,10 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         for order in orders_to_cancel:
             self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
         
+        # Update cancel timestamp if orders were cancelled
+        if orders_to_cancel:
+            self._cancel_timestamp = self.current_timestamp
+        
         # Return whether any orders were cancelled
         return len(orders_to_cancel) > 0
 
@@ -735,19 +739,25 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # Calculate optimal prices using Avellaneda model
             self.calculate_reservation_price_and_optimal_spread()
             
-            # Cancel old orders first
-            orders_cancelled = self.cancel_active_orders()
-            if orders_cancelled:
-                self._last_order_cancel_timestamp = timestamp
-            
-            # Create and execute proposal only if no active orders and enough time has passed since last cancel
-            time_since_cancel = timestamp - self._last_order_cancel_timestamp
-            if not self.active_orders and time_since_cancel >= self._order_cancel_wait_time:
-                proposal = self.create_base_proposal()
-                self.apply_budget_constraint(proposal)
+            # Trading is allowed only after create_timestamp
+            if self._create_timestamp <= timestamp:
+                # 1. Calculate reservation price and optimal spread
+                self.calculate_reservation_price_and_optimal_spread()
                 
-                if proposal.buys or proposal.sells:
-                    self._execute_orders_proposal(proposal, PositionAction.OPEN)
+                # 2. Check if calculated prices make sense
+                if self._optimal_bid > 0 and self._optimal_ask > 0:
+                    # 3. Create base order proposals
+                    proposal = self.create_base_proposal()
+                    # 4. Apply budget constraint
+                    self.apply_budget_constraint(proposal)
+                    # 5. Cancel active orders (based on proposal and timing)
+                    self.cancel_active_orders(proposal)
+            
+            # 6. Create new orders only if timing allows
+            proposal = self.create_base_proposal() if self._create_timestamp <= timestamp else None
+            if self.to_create_orders(proposal):
+                self.apply_budget_constraint(proposal)
+                self._execute_orders_proposal(proposal, PositionAction.OPEN)
         else:
             # Have positions - manage them
             self.manage_positions(session_positions)
@@ -778,6 +788,35 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         """Check if enough data has been collected"""
         return (self._avg_vol.is_sampling_buffer_full and 
                 (self._trading_intensity is None or self._trading_intensity.is_sampling_buffer_full))
+    
+    def to_create_orders(self, proposal: Proposal) -> bool:
+        """
+        Determine if orders should be created based on timing and proposal validity
+        
+        Following spot strategy pattern for order timing management
+        """
+        if proposal is None:
+            return False
+        
+        # Check if any valid orders in proposal
+        if not (proposal.buys or proposal.sells):
+            return False
+        
+        # Check timing constraints (following spot strategy pattern)
+        if self._cancel_timestamp > self.current_timestamp:
+            return False
+        
+        if self._create_timestamp > self.current_timestamp:
+            return False
+        
+        return True
+    
+    def set_timers(self, next_cycle: float):
+        """Set timing for next order cycle (following spot strategy pattern)"""
+        if self._create_timestamp <= self.current_timestamp:
+            self._create_timestamp = next_cycle
+        if self._cancel_timestamp <= self.current_timestamp:
+            self._cancel_timestamp = min(self._create_timestamp, next_cycle)
 
     def format_status(self) -> str:
         """Format strategy status display"""
@@ -827,9 +866,14 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         return "\n".join(lines)
 
     # Event handlers
-    def did_fill_order(self, order_filled_event):
-        """Handle order fill events"""
+    def did_fill_order(self, order_filled_event: OrderFilledEvent):
+        """Handle order fill events and update timing (following spot strategy pattern)"""
         self._last_own_trade_price = order_filled_event.price
+        
+        # Set timing for next order creation after fill (following spot strategy pattern)
+        next_cycle = self.current_timestamp + self._filled_order_delay
+        self._create_timestamp = next_cycle
+        self._cancel_timestamp = min(self._cancel_timestamp, self._create_timestamp)
 
     def did_complete_buy_order(self, buy_order_completed_event: BuyOrderCompletedEvent):
         """Handle buy order completion"""
