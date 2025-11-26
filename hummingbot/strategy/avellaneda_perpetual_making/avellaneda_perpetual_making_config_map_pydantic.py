@@ -10,12 +10,12 @@ from hummingbot.client.config.config_validators import (
     validate_exchange,
     validate_market_trading_pair,
 )
-from hummingbot.client.config.strategy_config_data_types import BaseTradingStrategyConfigMap
+from hummingbot.client.config.strategy_config_data_types import BaseStrategyConfigMap
 from hummingbot.client.settings import required_exchanges
 from hummingbot.connector.utils import split_hb_trading_pair
 
 
-class AvellanedaPerpetualMakingConfigMap(BaseTradingStrategyConfigMap):
+class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     strategy: str = Field(default="avellaneda_perpetual_making")
     
     derivative: str = Field(
