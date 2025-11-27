@@ -693,46 +693,63 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self._exit_orders[order_id] = self.current_timestamp
 
     def cancel_active_orders(self, proposal: Proposal = None):
-        """Cancel orders that need refreshing or have stale prices"""
+        """FIXED: Cancel orders that need refreshing or have stale prices"""
         orders_to_cancel = []
+        
+        # CRITICAL FIX: Log current state for debugging
+        if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+            buy_orders = [o for o in self.active_orders if o.is_buy]
+            sell_orders = [o for o in self.active_orders if not o.is_buy]
+            self.logger().debug(f"📋 Checking {len(buy_orders)} buy orders and {len(sell_orders)} sell orders for cancellation")
         
         for order in self.active_orders[:]:
             should_cancel = False
+            cancel_reason = ""
             
-            # 1. Cancel by age (existing logic)
+            # 1. Cancel by age (primary reason)
             age = self.current_timestamp - order.creation_timestamp
             if age >= self._order_refresh_time:
                 should_cancel = True
+                cancel_reason = f"age {age:.1f}s >= {self._order_refresh_time}s"
             
-            # 2. CRITICAL FIX: Cancel by price deviation to prevent stale quotes
+            # 2. Cancel by price deviation to prevent stale quotes
             elif proposal is not None and self._optimal_bid > 0 and self._optimal_ask > 0:
-                # Check if current optimal prices differ significantly from active order prices
                 if order.is_buy:
                     # For buy orders, check against optimal bid
                     price_deviation_pct = abs(order.price - self._optimal_bid) / self._optimal_bid * 100
                     if price_deviation_pct > float(self._order_refresh_tolerance_pct):
                         should_cancel = True
-                        self.logger().debug(f"🔄 Cancelling buy order due to price deviation: {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%")
+                        cancel_reason = f"buy price deviation {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%"
                 else:
                     # For sell orders, check against optimal ask
                     price_deviation_pct = abs(order.price - self._optimal_ask) / self._optimal_ask * 100
                     if price_deviation_pct > float(self._order_refresh_tolerance_pct):
                         should_cancel = True
-                        self.logger().debug(f"🔄 Cancelling sell order due to price deviation: {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%")
+                        cancel_reason = f"sell price deviation {price_deviation_pct:.2f}% > {self._order_refresh_tolerance_pct}%"
             
             if should_cancel:
                 orders_to_cancel.append(order)
+                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                    side = "BUY" if order.is_buy else "SELL"
+                    self.logger().info(f"🔄 Cancelling {side} order {order.client_order_id[:8]}... - Reason: {cancel_reason}")
         
         # Cancel all orders that need cancelling
+        cancelled_count = 0
         for order in orders_to_cancel:
-            self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
+            try:
+                self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
+                cancelled_count += 1
+            except Exception as e:
+                self.logger().warning(f"⚠️ Failed to cancel order {order.client_order_id}: {e}")
         
         # Update cancel timestamp if orders were cancelled - add delay
-        if orders_to_cancel:
+        if cancelled_count > 0:
             self._cancel_timestamp = self.current_timestamp + 2.0  # Wait 2 seconds after cancelling
+            if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                self.logger().info(f"📤 Cancelled {cancelled_count} orders, blocking new orders until {self._cancel_timestamp:.1f}")
         
         # Return whether any orders were cancelled
-        return len(orders_to_cancel) > 0
+        return cancelled_count > 0
 
     def start(self, clock: Clock, timestamp: float):
         """Strategy start"""
@@ -791,9 +808,22 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # 4. Create new orders only if timing and conditions allow
             if self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
+                
+                # CRITICAL FIX: Log order creation for debugging
+                buy_count = len(proposal.buys)
+                sell_count = len(proposal.sells)
+                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                    self.logger().info(f"🚀 Executing order proposal: {buy_count} buys, {sell_count} sells")
+                
                 self._execute_orders_proposal(proposal, PositionAction.OPEN)
-                # Set next creation time to avoid immediate re-creation
+                
+                # CRITICAL FIX: Set next creation time IMMEDIATELY after sending orders
+                # This prevents any possibility of double-creation before WebSocket updates
                 self._create_timestamp = timestamp + self._order_refresh_time
+                
+                # Additional safety: also update cancel timestamp to prevent immediate cancellation
+                if self._cancel_timestamp <= timestamp:
+                    self._cancel_timestamp = timestamp + 1.0  # Minimum 1 second before cancelling new orders
         else:
             # Have positions - manage them (with exit order protection)
             if not self._has_pending_exit_orders():
@@ -839,7 +869,12 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
     
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
-        Determine if orders should be created based on timing and proposal validity
+        FIXED: Determine if orders should be created with strict single-order-per-side logic
+        
+        Key principles:
+        1. Only ONE order per side (buy/sell) should exist at any time
+        2. No layering or multiple orders on the same side
+        3. Clear timing constraints to prevent order spam
         """
         if proposal is None:
             return False
@@ -848,7 +883,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         if not (proposal.buys or proposal.sells):
             return False
         
-        # Check timing constraints
+        # CRITICAL FIX: Single timing constraint check (remove duplicates)
         if self._create_timestamp > self.current_timestamp:
             return False
             
@@ -859,51 +894,47 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         existing_buy_orders = [o for o in self.active_orders if o.is_buy]
         existing_sell_orders = [o for o in self.active_orders if not o.is_buy]
         
-        # LOGIC ADJUSTMENT:
-        # Instead of blocking new orders if old ones exist, we only block if we are ALREADY
-        # fully covered on that side. The logic to CANCEL the old "bad price" orders 
-        # is handled by cancel_active_orders() which runs BEFORE this function.
-        #
-        # However, if cancel_active_orders didn't cancel them (because they are not old enough),
-        # but the price moved significantly, we might want to allow creating new ones (layering)
-        # or block. For a simple MM, blocking while orders exist is safer to prevent over-trading,
-        # BUT we must ensure we don't end up with stale orders forever.
+        # CRITICAL FIX: Strict one-order-per-side enforcement
+        # If we already have orders on a side, we BLOCK creation for that side entirely
+        # This prevents any possibility of multiple orders accumulating
         
-        # If we have recently cancelled orders (latency gap), active_orders might still show them.
-        # We'll trust the logic that if we have orders, we don't create new ones UNLESS
-        # the proposal is for a side we are missing.
-
-        proposal_has_buys = len(proposal.buys) > 0
-        proposal_has_sells = len(proposal.sells) > 0
-
-        # If we already have buys, remove buys from proposal (prevent layering for now)
-        if existing_buy_orders and proposal_has_buys:
-            proposal.buys = []
+        # Check if we can create buy orders
+        can_create_buys = len(existing_buy_orders) == 0 and len(proposal.buys) > 0
+        # Check if we can create sell orders  
+        can_create_sells = len(existing_sell_orders) == 0 and len(proposal.sells) > 0
+        
+        # If we can't create either side, abort
+        if not (can_create_buys or can_create_sells):
+            return False
             
-        # If we already have sells, remove sells from proposal
-        if existing_sell_orders and proposal_has_sells:
+        # Filter proposal to only include sides we can actually create
+        if not can_create_buys:
+            proposal.buys = []
+        if not can_create_sells:
             proposal.sells = []
             
-        # If proposal is empty after filtering, stop
+        # Double-check proposal is still valid after filtering
         if not (proposal.buys or proposal.sells):
-            return False
-        
-        # Check timing constraints - must pass create timestamp
-        if self._create_timestamp > self.current_timestamp:
-            return False
-        
-        # Don't create immediately after cancelling
-        if self._cancel_timestamp > self.current_timestamp:
             return False
         
         # Safety check: ensure reasonable prices and sizes
         for buy in proposal.buys:
             if buy.price <= 0 or buy.size <= 0:
+                self.logger().warning(f"⚠️ Invalid buy order: price={buy.price}, size={buy.size}")
                 return False
         
         for sell in proposal.sells:
             if sell.price <= 0 or sell.size <= 0:
+                self.logger().warning(f"⚠️ Invalid sell order: price={sell.price}, size={sell.size}")
                 return False
+        
+        # Log what we're about to create for debugging
+        if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+            buy_count = len(proposal.buys)
+            sell_count = len(proposal.sells) 
+            existing_buy_count = len(existing_buy_orders)
+            existing_sell_count = len(existing_sell_orders)
+            self.logger().info(f"📝 Creating orders - Existing: {existing_buy_count} buys, {existing_sell_count} sells | New: {buy_count} buys, {sell_count} sells")
         
         return True
     
