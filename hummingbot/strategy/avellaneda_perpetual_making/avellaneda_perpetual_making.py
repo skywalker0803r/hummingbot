@@ -802,11 +802,20 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # 2. Create base proposal 
             proposal = self.create_base_proposal()
             
-            # 3. Cancel active orders if needed (based on timing and age)
-            self.cancel_active_orders(proposal)
+            # CRITICAL FIX: Cancel and create logic with proper sequencing
+            # 
+            # Problem: Original logic had race condition between cancel and create
+            # Solution: 
+            #   1. Cancel old orders if needed
+            #   2. If orders were cancelled, WAIT for next tick to create new ones
+            #   3. Only create new orders if no cancellation happened this tick
             
-            # 4. Create new orders only if timing and conditions allow
-            if self.to_create_orders(proposal):
+            # 3. Cancel active orders if needed (based on timing and age)
+            orders_were_cancelled = self.cancel_active_orders(proposal)
+            
+            # 4. Create new orders ONLY if no cancellation happened this tick
+            # This prevents race condition where cancelled orders haven't been removed from active_orders yet
+            if not orders_were_cancelled and self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
                 
                 # CRITICAL FIX: Log order creation for debugging
@@ -824,6 +833,10 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 # Additional safety: also update cancel timestamp to prevent immediate cancellation
                 if self._cancel_timestamp <= timestamp:
                     self._cancel_timestamp = timestamp + 1.0  # Minimum 1 second before cancelling new orders
+            elif orders_were_cancelled:
+                # Orders were cancelled this tick - log and wait for next tick
+                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                    self.logger().info(f"⏳ Orders cancelled this tick - waiting for next tick to create new orders")
         else:
             # Have positions - manage them (with exit order protection)
             if not self._has_pending_exit_orders():
