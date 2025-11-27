@@ -444,8 +444,29 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             
             # Calculate optimal spread: δ = γ*σ*√T + (2/γ)*ln(1 + γ/κ)
             spread_vol_term = vol_term
-            spread_liquidity_term = (Decimal("2") / gamma) * (Decimal("1") + gamma / kappa).ln()
-            self._optimal_spread = spread_vol_term + spread_liquidity_term
+            
+            # CRITICAL FIX: Prevent extreme spreads when gamma is very small
+            # The (2/γ) term can explode when gamma approaches 0
+            # Add safeguards to ensure reasonable spread calculations
+            gamma_safe = max(gamma, Decimal("0.1"))  # Minimum gamma of 0.1 for spread calculation
+            
+            try:
+                spread_liquidity_term = (Decimal("2") / gamma_safe) * (Decimal("1") + gamma_safe / kappa).ln()
+                self._optimal_spread = spread_vol_term + spread_liquidity_term
+                
+                # ADDITIONAL SAFEGUARD: Cap maximum spread at 20% of current price
+                max_spread = current_price * Decimal("0.20")  # 20% maximum spread
+                if self._optimal_spread > max_spread:
+                    if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                        spread_pct = (self._optimal_spread / current_price) * 100
+                        self.logger().warning(f"⚠️ Calculated spread too large ({spread_pct:.1f}%), capping at 20%")
+                        self.logger().warning(f"   Original gamma: {gamma:.6f}, Safe gamma: {gamma_safe:.6f}")
+                    self._optimal_spread = max_spread
+                    
+            except Exception as e:
+                self.logger().error(f"❌ Error in spread calculation: {e}")
+                # Fallback to volatility-based spread only
+                self._optimal_spread = spread_vol_term * Decimal("2")
             
             # Apply minimum spread constraint
             min_spread_abs = current_price * self._min_spread / Decimal("100")
@@ -464,15 +485,18 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self._optimal_ask = current_price * Decimal("1.001")
             
             if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
-                self.logger().debug(f"💰 Avellaneda Calculation:")
-                self.logger().debug(f"   Current Price: {current_price:.6f}")
-                self.logger().debug(f"   Inventory (q): {q:.6f}")
-                self.logger().debug(f"   Volatility (σ): {volatility:.6f}")
-                self.logger().debug(f"   Risk Factor (γ): {gamma:.6f}")
-                self.logger().debug(f"   Reservation Price: {self._reservation_price:.6f}")
-                self.logger().debug(f"   Optimal Spread: {self._optimal_spread:.6f}")
-                self.logger().debug(f"   Optimal Bid: {self._optimal_bid:.6f}")
-                self.logger().debug(f"   Optimal Ask: {self._optimal_ask:.6f}")
+                spread_pct = (self._optimal_spread / current_price) * 100
+                self.logger().info(f"💰 Avellaneda Calculation:")
+                self.logger().info(f"   Current Price: {current_price:.6f}")
+                self.logger().info(f"   Inventory (q): {q:.6f}")
+                self.logger().info(f"   Volatility (σ): {volatility:.6f}")
+                self.logger().info(f"   Risk Factor (γ): {gamma:.6f} {'(adaptive)' if self._use_adaptive_gamma else '(fixed)'}")
+                if gamma != gamma_safe:
+                    self.logger().info(f"   Safe Gamma: {gamma_safe:.6f} (adjusted for calculation)")
+                self.logger().info(f"   Reservation Price: {self._reservation_price:.6f}")
+                self.logger().info(f"   Optimal Spread: {self._optimal_spread:.6f} ({spread_pct:.2f}%)")
+                self.logger().info(f"   Optimal Bid: {self._optimal_bid:.6f} ({((self._optimal_bid/current_price-1)*100):+.2f}%)")
+                self.logger().info(f"   Optimal Ask: {self._optimal_ask:.6f} ({((self._optimal_ask/current_price-1)*100):+.2f}%)")
                 
         except Exception as e:
             self.logger().error(f"❌ Error calculating Avellaneda prices: {e}")
