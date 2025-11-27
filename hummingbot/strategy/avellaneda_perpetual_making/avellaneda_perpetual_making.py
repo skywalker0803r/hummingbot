@@ -152,6 +152,18 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._position_mode_not_ready_counter = 0
         self._last_own_trade_price = Decimal("0")
         
+        # Error handling state
+        self._last_error_timestamp = 0.0
+        self._consecutive_error_count = 0
+        self._error_cooldown_seconds = 60.0
+        self._max_consecutive_errors = 3
+        
+        # Error handling state
+        self._last_error_timestamp = 0.0
+        self._consecutive_error_count = 0
+        self._error_cooldown_seconds = 60.0
+        self._max_consecutive_errors = 3
+        
 
     def init_params(self,
                     market_info: MarketTradingPairTuple,
@@ -792,6 +804,21 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             self._all_markets_ready = all([market.ready for market in self.active_markets])
             if not self._all_markets_ready:
                 return
+        
+        # Error cooldown: if recent order errors occurred, pause new trading cycles
+        if self._last_error_timestamp > 0:
+            elapsed_since_error = self.current_timestamp - self._last_error_timestamp
+            if elapsed_since_error < self._error_cooldown_seconds:
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    self.logger().info(
+                        f"⏸ Error cooldown active ({elapsed_since_error:.1f}s < {self._error_cooldown_seconds}s), "
+                        f"skipping order creation this tick."
+                    )
+                return
+            else:
+                # Cooldown finished, reset error counter
+                self._last_error_timestamp = 0.0
+                self._consecutive_error_count = 0
 
         # Update market data
         self._collect_market_variables(timestamp)
@@ -849,7 +876,15 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 # Orders were force cancelled - confirmation mechanism in to_create_orders() will handle the wait
             
             # 4. Create new orders following perpetual_market_making pattern
-            if self.to_create_orders(proposal):
+            # Before creating new orders, ensure there are no open orders on the exchange side
+            exchange_open_orders = self._get_open_orders_from_exchange()
+            if exchange_open_orders:
+                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                    self.logger().info(
+                        f"⏸ Detected {len(exchange_open_orders)} open orders on exchange; "
+                        f"skipping new order creation until they are cleared."
+                    )
+            elif self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
                 self._execute_orders_proposal(proposal, PositionAction.OPEN)
         else:
@@ -879,22 +914,15 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self._alpha = Decimal(str(self._alpha)) if self._alpha else Decimal("0.1")
                 self._kappa = Decimal(str(self._kappa)) if self._kappa else Decimal("1.0")
 
-    def _is_algorithm_ready(self) -> bool:
-        """Check if enough data has been collected"""
-        # Basic buffer readiness
-        buffers_ready = (self._avg_vol.is_sampling_buffer_full and 
-                        (self._trading_intensity is None or self._trading_intensity.is_sampling_buffer_full))
-        
-        # Additional stability check: ensure we have realistic volatility
-        if buffers_ready and self._avg_vol.current_value is not None:
-            volatility = self._avg_vol.current_value
-            # Volatility should be between 0.001% and 50% (realistic range)
-            if volatility < 0.00001 or volatility > 0.5:
-                self.logger().warning(f"⚠️  Unrealistic volatility detected: {volatility:.6f}. Waiting for more stable data...")
-                return False
-        
-        return buffers_ready
-    
+    def _get_open_orders_from_exchange(self):
+        """Safely get current open orders for this trading pair from the exchange connector."""
+        try:
+            market: DerivativeBase = self._market_info.market
+            return market.get_open_orders(self._market_info.trading_pair)
+        except Exception as e:
+            self.logger().warning(f"⚠️ Failed to fetch open orders from exchange: {e}")
+            return []
+
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
         ENHANCED: Add confirmation mechanism to ensure no active orders before creating new ones
@@ -1010,6 +1038,21 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         next_cycle = self.current_timestamp + self._filled_order_delay
         self._create_timestamp = next_cycle
         self._cancel_timestamp = min(self._cancel_timestamp, self._create_timestamp)
+
+    def did_fail_order(self, order_filled_event: OrderFilledEvent):
+        """Handle order failure events and activate cooldown"""
+        self._consecutive_error_count += 1
+        self._last_error_timestamp = self.current_timestamp
+        if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+            self.logger().warning(
+                f"⚠️ Order error detected. Consecutive errors: {self._consecutive_error_count}. "
+                f"Entering {self._error_cooldown_seconds}s cooldown."
+            )
+
+        if self._consecutive_error_count >= self._max_consecutive_errors:
+            self.logger().error(
+                "❌ Max consecutive order errors reached. Consider checking balance, leverage, or connector settings."
+            )
 
     def did_complete_buy_order(self, buy_order_completed_event: BuyOrderCompletedEvent):
         """Handle buy order completion"""
