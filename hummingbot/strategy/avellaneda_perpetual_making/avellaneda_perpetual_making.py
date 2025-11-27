@@ -424,7 +424,9 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 return  # Cannot calculate without volatility
             
             # Time horizon - for perpetual futures, use order refresh time normalized to annual basis
-            time_fraction = Decimal(str(self._order_refresh_time / (365.25 * 24 * 3600)))  # Convert to years
+            # CRITICAL FIX: Use same time calculation as avellaneda_market_making
+            # For infinite timespan, use fixed time_left_fraction = 1 (from line 929 in market making)
+            time_left_fraction = Decimal("1.0")
             
             # Risk factor (γ)
             gamma = self.gamma
@@ -439,34 +441,33 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 kappa = self._kappa
             
             # Calculate reservation price: r = S - q*γ*σ*√T
-            vol_term = gamma * volatility * (time_fraction ** Decimal("0.5"))
+            vol_term = gamma * volatility * time_left_fraction
             self._reservation_price = current_price - (q * vol_term)
             
-            # Calculate optimal spread: δ = γ*σ*√T + (2/γ)*ln(1 + γ/κ)
-            spread_vol_term = vol_term
+            # CRITICAL FIX: Use the correct Avellaneda-Stoikov formula from the market making version
+            # The original perpetual version had the wrong formula!
             
-            # CRITICAL FIX: Prevent extreme spreads when gamma is very small
-            # The (2/γ) term can explode when gamma approaches 0
-            # Add safeguards to ensure reasonable spread calculations
-            gamma_safe = max(gamma, Decimal("0.1"))  # Minimum gamma of 0.1 for spread calculation
+            # Correct formula from avellaneda_market_making.pyx lines 941-942:
+            # optimal_spread = γ * σ * √T + (2 * ln(1 + γ/κ)) / γ
             
-            try:
-                spread_liquidity_term = (Decimal("2") / gamma_safe) * (Decimal("1") + gamma_safe / kappa).ln()
-                self._optimal_spread = spread_vol_term + spread_liquidity_term
-                
-                # ADDITIONAL SAFEGUARD: Cap maximum spread at 20% of current price
-                max_spread = current_price * Decimal("0.20")  # 20% maximum spread
-                if self._optimal_spread > max_spread:
-                    if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
-                        spread_pct = (self._optimal_spread / current_price) * 100
-                        self.logger().warning(f"⚠️ Calculated spread too large ({spread_pct:.1f}%), capping at 20%")
-                        self.logger().warning(f"   Original gamma: {gamma:.6f}, Safe gamma: {gamma_safe:.6f}")
-                    self._optimal_spread = max_spread
+            self._optimal_spread = vol_term  # γ * σ * √T
+            
+            # Add liquidity term: (2 * ln(1 + γ/κ)) / γ
+            if kappa > 0:
+                try:
+                    liquidity_term = 2 * (Decimal("1") + gamma / kappa).ln() / gamma
+                    self._optimal_spread += liquidity_term
                     
-            except Exception as e:
-                self.logger().error(f"❌ Error in spread calculation: {e}")
-                # Fallback to volatility-based spread only
-                self._optimal_spread = spread_vol_term * Decimal("2")
+                    if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                        self.logger().debug(f"📊 Spread components:")
+                        self.logger().debug(f"   Vol term (γσ√T): {vol_term:.8f}")
+                        self.logger().debug(f"   Liquidity term (2ln(1+γ/κ)/γ): {liquidity_term:.8f}")
+                        self.logger().debug(f"   Total spread: {self._optimal_spread:.8f}")
+                        
+                except Exception as e:
+                    self.logger().warning(f"⚠️ Error in liquidity term calculation: {e}")
+                    # Use only volatility term if liquidity calculation fails
+                    pass
             
             # Apply minimum spread constraint
             min_spread_abs = current_price * self._min_spread / Decimal("100")
@@ -491,8 +492,6 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self.logger().info(f"   Inventory (q): {q:.6f}")
                 self.logger().info(f"   Volatility (σ): {volatility:.6f}")
                 self.logger().info(f"   Risk Factor (γ): {gamma:.6f} {'(adaptive)' if self._use_adaptive_gamma else '(fixed)'}")
-                if gamma != gamma_safe:
-                    self.logger().info(f"   Safe Gamma: {gamma_safe:.6f} (adjusted for calculation)")
                 self.logger().info(f"   Reservation Price: {self._reservation_price:.6f}")
                 self.logger().info(f"   Optimal Spread: {self._optimal_spread:.6f} ({spread_pct:.2f}%)")
                 self.logger().info(f"   Optimal Bid: {self._optimal_bid:.6f} ({((self._optimal_bid/current_price-1)*100):+.2f}%)")
