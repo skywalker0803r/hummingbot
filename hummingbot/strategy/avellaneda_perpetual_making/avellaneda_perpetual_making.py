@@ -433,12 +433,20 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             
             # Order book parameters (α, κ) 
             if self._alpha is None or self._kappa is None or self._kappa <= 0:
-                # Use default values if liquidity measurements aren't ready
+                # CRITICAL FIX: Use reasonable default values for kappa
+                # kappa represents order book depth - small values cause huge spreads
+                # Reasonable range: 50-200 for most markets
                 alpha = Decimal("0.1")
-                kappa = Decimal("1.0")
+                kappa = Decimal("100.0")  # Much larger default for reasonable spreads
+                
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    self.logger().debug(f"📊 Using default liquidity parameters: α={alpha}, κ={kappa}")
             else:
                 alpha = self._alpha
-                kappa = self._kappa
+                kappa = max(self._kappa, Decimal("50.0"))  # Minimum kappa to prevent spread explosion
+                
+                if kappa != self._kappa:
+                    self.logger().warning(f"⚠️ Adjusted kappa from {self._kappa} to {kappa} to prevent spread explosion")
             
             # Calculate reservation price: r = S - q*γ*σ*√T
             vol_term = gamma * volatility * time_left_fraction
@@ -469,9 +477,19 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                     # Use only volatility term if liquidity calculation fails
                     pass
             
-            # Apply minimum spread constraint
-            min_spread_abs = current_price * self._min_spread / Decimal("100")
+            # CRITICAL FIX: Apply minimum spread constraint with correct unit interpretation
+            # min_spread is already in decimal form (0.001 = 0.1%), no need to divide by 100
+            min_spread_abs = current_price * self._min_spread
+            
+            if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                calculated_spread_pct = (self._optimal_spread / current_price) * 100
+                min_spread_pct = self._min_spread * 100
+                self.logger().debug(f"📏 Spread constraint check:")
+                self.logger().debug(f"   Calculated spread: {self._optimal_spread:.8f} ({calculated_spread_pct:.4f}%)")
+                self.logger().debug(f"   Minimum spread: {min_spread_abs:.8f} ({min_spread_pct:.4f}%)")
+            
             if self._optimal_spread < min_spread_abs:
+                self.logger().warning(f"⚠️ Calculated spread {self._optimal_spread:.8f} below minimum {min_spread_abs:.8f}, applying minimum")
                 self._optimal_spread = min_spread_abs
             
             # Calculate optimal bid and ask
@@ -502,9 +520,12 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             # Fallback to simple mid-price based pricing
             current_price = self.get_price()
             self._reservation_price = current_price
-            self._optimal_spread = current_price * self._min_spread / Decimal("100")
-            self._optimal_bid = current_price * (Decimal("1") - self._min_spread / Decimal("200"))
-            self._optimal_ask = current_price * (Decimal("1") + self._min_spread / Decimal("200"))
+            
+            # CRITICAL FIX: Correct unit interpretation for fallback pricing too
+            self._optimal_spread = current_price * self._min_spread
+            half_spread_ratio = self._min_spread / Decimal("2")
+            self._optimal_bid = current_price * (Decimal("1") - half_spread_ratio)
+            self._optimal_ask = current_price * (Decimal("1") + half_spread_ratio)
 
     def get_volatility(self) -> Decimal:
         """Get current volatility estimate"""
