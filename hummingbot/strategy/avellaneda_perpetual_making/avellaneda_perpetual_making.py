@@ -250,11 +250,22 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         
         self.add_markets([market_info.market])
         
+        # Version banner for identification
+        self.logger().info("=" * 70)
+        self.logger().info("🚀 AVELLANEDA PERPETUAL MAKING STRATEGY - ENHANCED VERSION")
+        self.logger().info("   🔧 ORDER MANAGEMENT FIX v2.0 - WITH CONFIRMATION MECHANISM")
+        self.logger().info("   ✅ Multi-order accumulation prevention ACTIVE")
+        self.logger().info("   ✅ Real-time order confirmation system ENABLED")
+        self.logger().info("   ✅ State-driven cancel-then-create logic IMPLEMENTED")
+        self.logger().info("=" * 70)
+        
         self.logger().info("✅ Avellaneda Perpetual Making Strategy initialized")
         self.logger().info(f"   📊 Risk Factor (γ): {self._risk_factor}")
         self.logger().info(f"   🎯 Target Inventory: {self._inventory_target_base_pct}%")
         self.logger().info(f"   📈 Leverage: {self._leverage}x")
         self.logger().info(f"   🔄 Position Mode: {position_mode}")
+        self.logger().info(f"   ⏰ Order Refresh Time: {self._order_refresh_time}s")
+        self.logger().info(f"   🛡️ Order Management: Enhanced with confirmation mechanism")
         if self._use_adaptive_gamma:
             self.logger().info(f"   🧠 Adaptive Gamma: Enabled")
 
@@ -665,7 +676,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         return Proposal(buys, sells)
 
     def _execute_orders_proposal(self, proposal: Proposal, position_action: PositionAction):
-        """Execute order proposals"""
+        """Execute order proposals - simplified following perpetual_market_making pattern"""
         # For stop-loss orders (CLOSE action), use market orders to ensure immediate execution
         # For market making orders (OPEN action), use limit orders
         order_type = OrderType.MARKET if position_action == PositionAction.CLOSE else OrderType.LIMIT
@@ -691,6 +702,11 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             )
             if position_action == PositionAction.CLOSE:
                 self._exit_orders[order_id] = self.current_timestamp
+        
+        # CRITICAL: Update create timestamp after order execution (like perpetual_market_making)
+        if position_action == PositionAction.OPEN and (proposal.buys or proposal.sells):
+            next_cycle = self.current_timestamp + self._order_refresh_time
+            self._create_timestamp = next_cycle
 
     def cancel_active_orders(self, proposal: Proposal = None):
         """FIXED: Cancel orders that need refreshing or have stale prices"""
@@ -745,11 +761,11 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             except Exception as e:
                 self.logger().warning(f"⚠️ Failed to cancel order {order.client_order_id}: {e}")
         
-        # Update cancel timestamp if orders were cancelled - add delay
+        # Update cancel timestamp if orders were cancelled
+        # NOTE: We no longer need a fixed delay since to_create_orders() now confirms no active orders exist
         if cancelled_count > 0:
-            self._cancel_timestamp = self.current_timestamp + 2.0  # Wait 2 seconds after cancelling
             if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-                self.logger().info(f"📤 Cancelled {cancelled_count} orders, blocking new orders until {self._cancel_timestamp:.1f}")
+                self.logger().info(f"📤 Cancelled {cancelled_count} orders, waiting for exchange confirmation...")
         
         # Return whether any orders were cancelled
         return cancelled_count > 0
@@ -830,33 +846,12 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                     except Exception as e:
                         self.logger().warning(f"⚠️ Failed to force cancel order {order.client_order_id}: {e}")
                 
-                if orders_were_cancelled:
-                    self._cancel_timestamp = timestamp + 2.0  # Wait for cancellations to complete
+                # Orders were force cancelled - confirmation mechanism in to_create_orders() will handle the wait
             
-            # 4. Create new orders ONLY if no cancellation happened this tick
-            # This prevents race condition where cancelled orders haven't been removed from active_orders yet
-            if not orders_were_cancelled and self.to_create_orders(proposal):
+            # 4. Create new orders following perpetual_market_making pattern
+            if self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
-                
-                # CRITICAL FIX: Log order creation for debugging
-                buy_count = len(proposal.buys)
-                sell_count = len(proposal.sells)
-                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-                    self.logger().info(f"🚀 Executing order proposal: {buy_count} buys, {sell_count} sells")
-                
                 self._execute_orders_proposal(proposal, PositionAction.OPEN)
-                
-                # CRITICAL FIX: Set next creation time IMMEDIATELY after sending orders
-                # This prevents any possibility of double-creation before WebSocket updates
-                self._create_timestamp = timestamp + self._order_refresh_time
-                
-                # Additional safety: also update cancel timestamp to prevent immediate cancellation
-                if self._cancel_timestamp <= timestamp:
-                    self._cancel_timestamp = timestamp + 1.0  # Minimum 1 second before cancelling new orders
-            elif orders_were_cancelled:
-                # Orders were cancelled this tick - log and wait for next tick
-                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-                    self.logger().info(f"⏳ Orders cancelled this tick - waiting for next tick to create new orders")
         else:
             # Have positions - manage them (with exit order protection)
             if not self._has_pending_exit_orders():
@@ -902,72 +897,26 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
     
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
-        FIXED: Determine if orders should be created with strict single-order-per-side logic
-        
-        Key principles:
-        1. Only ONE order per side (buy/sell) should exist at any time
-        2. No layering or multiple orders on the same side
-        3. Clear timing constraints to prevent order spam
+        ENHANCED: Add confirmation mechanism to ensure no active orders before creating new ones
         """
-        if proposal is None:
+        # Basic timing and proposal checks
+        if not (self._create_timestamp <= self.current_timestamp and
+                proposal is not None and len(proposal.buys + proposal.sells) > 0):
             return False
         
-        # Check if any valid orders in proposal
-        if not (proposal.buys or proposal.sells):
-            return False
+        # CRITICAL ADDITION: Confirm no active orders exist before creating new ones
+        # This ensures cancellation is complete before proceeding
+        active_order_count = len(self.active_orders)
         
-        # CRITICAL FIX: Single timing constraint check (remove duplicates)
-        if self._create_timestamp > self.current_timestamp:
-            return False
-            
-        if self._cancel_timestamp > self.current_timestamp:
-            return False
-
-        # Identify what we currently have
-        existing_buy_orders = [o for o in self.active_orders if o.is_buy]
-        existing_sell_orders = [o for o in self.active_orders if not o.is_buy]
-        
-        # CRITICAL FIX: Strict one-order-per-side enforcement
-        # If we already have orders on a side, we BLOCK creation for that side entirely
-        # This prevents any possibility of multiple orders accumulating
-        
-        # Check if we can create buy orders
-        can_create_buys = len(existing_buy_orders) == 0 and len(proposal.buys) > 0
-        # Check if we can create sell orders  
-        can_create_sells = len(existing_sell_orders) == 0 and len(proposal.sells) > 0
-        
-        # If we can't create either side, abort
-        if not (can_create_buys or can_create_sells):
+        if active_order_count > 0:
+            # Still have active orders - cancellation not complete yet
+            if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                self.logger().debug(f"⏳ Still have {active_order_count} active orders, waiting for cancellation to complete...")
             return False
             
-        # Filter proposal to only include sides we can actually create
-        if not can_create_buys:
-            proposal.buys = []
-        if not can_create_sells:
-            proposal.sells = []
-            
-        # Double-check proposal is still valid after filtering
-        if not (proposal.buys or proposal.sells):
-            return False
-        
-        # Safety check: ensure reasonable prices and sizes
-        for buy in proposal.buys:
-            if buy.price <= 0 or buy.size <= 0:
-                self.logger().warning(f"⚠️ Invalid buy order: price={buy.price}, size={buy.size}")
-                return False
-        
-        for sell in proposal.sells:
-            if sell.price <= 0 or sell.size <= 0:
-                self.logger().warning(f"⚠️ Invalid sell order: price={sell.price}, size={sell.size}")
-                return False
-        
-        # Log what we're about to create for debugging
+        # All clear - no active orders and timing allows creation
         if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-            buy_count = len(proposal.buys)
-            sell_count = len(proposal.sells) 
-            existing_buy_count = len(existing_buy_orders)
-            existing_sell_count = len(existing_sell_orders)
-            self.logger().info(f"📝 Creating orders - Existing: {existing_buy_count} buys, {existing_sell_count} sells | New: {buy_count} buys, {sell_count} sells")
+            self.logger().debug(f"✅ No active orders detected, proceeding with order creation")
         
         return True
     

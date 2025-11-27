@@ -1,0 +1,19 @@
+04:27:37 - avellaneda_perpetual_making - Collecting market data... 40 ticks remaining
+04:27:47 - avellaneda_perpetual_making - Collecting market data... 30 ticks remaining
+04:27:57 - avellaneda_perpetual_making - Collecting market data... 20 ticks remaining
+04:28:07 - avellaneda_perpetual_making - Collecting market data... 10 ticks remaining
+04:28:17 - avellaneda_perpetual_making - Collecting market data... 0 ticks remaining
+04:36:03 - avellaneda_perpetual_making - Creating orders - Existing: 0 buys, 0 sells | New: 1 buys, 1 sells
+04:36:03 - avellaneda_perpetual_making - Executing order proposal: 1 buys, 1 sells
+04:36:28 - client_order_tracker - Created LIMIT SELL order t-HBOTSKPUT6448c0cf1725a13bf0 for 10 to OPEN a XRP-USDT position at 2.2105.
+04:36:36 - client_order_tracker - Created LIMIT BUY order t-HBOTSKPUT6448c0cf17226a13bf0 for 10 to OPEN a XRP-USDT position at 2.2107.
+04:37:03 - avellaneda_perpetual_making - Creating orders - Existing: 0 buys, 0 sells | New: 1 buys, 1 sells
+04:37:03 - avellaneda_perpetual_making - Executing order proposal: 1 buys, 1 sells
+04:37:03 - client_order_tracker - Created LIMIT BUY order t-HBOTSKPUT6448c107d0967a13bf0 for 10 to OPEN a XRP-USDT position at 2.2110.
+04:37:03 - client_order_tracker - Created LIMIT SELL order t-HBOTSKPUT6448c107d0994a13bf0 for 10 to OPEN a XRP-USDT position at 2.2154.
+04:37:42 - adaptive_gamma_learner - Gamma updated: 0.100000, reward_improvement: 0.000002, direction: +1
+04:37:52 - adaptive_gamma_learner - Gamma updated: 0.100000, reward_improvement: -0.000002, direction: -1
+04:38:03 - avellaneda_perpetual_making - Creating orders - Existing: 0 buys, 0 sells | New: 1 buys, 1 sells
+04:38:03 - avellaneda_perpetual_making - Executing order proposal: 1 buys, 1 sells
+04:38:03 - client_order_tracker - Order t-HBOTSKPUT6448c14108ff0a13bf0 has failed. Order Update: OrderUpdate(trading_pair='XRP-USDT', update_timestamp=1764218283.0, new_state=<OrderState.FAILED:16>, csient_order_id='t-HBOTSKPUT6448c14108ff0a13bf0', exchange_order_id=None, misc_updates='{'error_message': 'Order amount OE-27 is lower than minimum order size 10 for the pair XRP-USDT. The order will not be created.', 'error_type': 'ValueError'}')
+04:38:08 - client_order_tracker - Created LIMIT BUY order t-HBOTSKPUT6448c14108fc2a13bf0 for 10 to OPEN a XRP-USDT position at 2.2114.
