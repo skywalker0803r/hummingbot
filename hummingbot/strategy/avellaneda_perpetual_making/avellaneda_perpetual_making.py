@@ -948,6 +948,19 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         
         return True
     
+    def is_algorithm_ready(self) -> bool:
+        """Public wrapper to avoid AttributeError in environments calling is_algorithm_ready()."""
+        try:
+            return self._is_algorithm_ready()
+        except AttributeError:
+            # Fallback: derive readiness from volatility buffer only
+            buffers_ready = (self._avg_vol is not None and getattr(self._avg_vol, 'is_sampling_buffer_full', False))
+            if buffers_ready and getattr(self._avg_vol, 'current_value', None) is not None:
+                volatility = self._avg_vol.current_value
+                if volatility < 0.00001 or volatility > 0.5:
+                    return False
+            return buffers_ready
+    
     def _has_pending_exit_orders(self) -> bool:
         """
         CRITICAL FIX: Check if there are pending exit orders to prevent double spending
