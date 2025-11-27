@@ -876,15 +876,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 # Orders were force cancelled - confirmation mechanism in to_create_orders() will handle the wait
             
             # 4. Create new orders following perpetual_market_making pattern
-            # Before creating new orders, ensure there are no open orders on the exchange side
-            exchange_open_orders = self._get_open_orders_from_exchange()
-            if exchange_open_orders:
-                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-                    self.logger().info(
-                        f"⏸ Detected {len(exchange_open_orders)} open orders on exchange; "
-                        f"skipping new order creation until they are cleared."
-                    )
-            elif self.to_create_orders(proposal):
+            if self.to_create_orders(proposal):
                 self.apply_budget_constraint(proposal)
                 self._execute_orders_proposal(proposal, PositionAction.OPEN)
         else:
@@ -914,37 +906,91 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self._alpha = Decimal(str(self._alpha)) if self._alpha else Decimal("0.1")
                 self._kappa = Decimal(str(self._kappa)) if self._kappa else Decimal("1.0")
 
-    def _get_open_orders_from_exchange(self):
-        """Safely get current open orders for this trading pair from the exchange connector."""
+    def _get_active_orders_from_exchange(self):
+        """
+        CRITICAL: Get active orders using the correct Hummingbot API
+        
+        This function uses the standard Hummingbot order tracking system to get current orders.
+        Unlike get_open_orders() which doesn't exist in all connectors, these properties are
+        available in all exchange connectors inheriting from ExchangePyBase.
+        """
         try:
-            market: DerivativeBase = self._market_info.market
-            return market.get_open_orders(self._market_info.trading_pair)
+            market = self._market_info.market
+            trading_pair = self._market_info.trading_pair
+            
+            # Method 1: Use in_flight_orders (most reliable for tracking order states)
+            active_orders = []
+            if hasattr(market, 'in_flight_orders'):
+                for order_id, in_flight_order in market.in_flight_orders.items():
+                    if (in_flight_order.trading_pair == trading_pair and 
+                        not in_flight_order.is_done and 
+                        not in_flight_order.is_cancelled and
+                        not in_flight_order.is_failure):
+                        active_orders.append(in_flight_order)
+                        
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    self.logger().debug(f"📊 Found {len(active_orders)} active in-flight orders for {trading_pair}")
+                return active_orders
+            
+            # Method 2: Use limit_orders as fallback
+            elif hasattr(market, 'limit_orders'):
+                limit_orders = [order for order in market.limit_orders 
+                              if order.trading_pair == trading_pair]
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    self.logger().debug(f"📊 Found {len(limit_orders)} limit orders for {trading_pair}")
+                return limit_orders
+            
+            # Method 3: Fallback to strategy's active_orders
+            else:
+                strategy_orders = self.active_orders
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    self.logger().debug(f"📊 Using strategy tracking: {len(strategy_orders)} active orders")
+                return strategy_orders
+                
         except Exception as e:
-            self.logger().warning(f"⚠️ Failed to fetch open orders from exchange: {e}")
-            return []
+            self.logger().error(f"❌ Error getting active orders: {e}")
+            # Always fallback to strategy's tracking
+            return self.active_orders
+
 
     def to_create_orders(self, proposal: Proposal) -> bool:
         """
-        ENHANCED: Add confirmation mechanism to ensure no active orders before creating new ones
+        ENHANCED: Add confirmation mechanism using reliable exchange order checking
         """
         # Basic timing and proposal checks
         if not (self._create_timestamp <= self.current_timestamp and
                 proposal is not None and len(proposal.buys + proposal.sells) > 0):
             return False
         
-        # CRITICAL ADDITION: Confirm no active orders exist before creating new ones
-        # This ensures cancellation is complete before proceeding
-        active_order_count = len(self.active_orders)
+        # CRITICAL: Use reliable exchange order checking to prevent duplicate orders
+        # This checks both strategy tracking AND exchange state
+        strategy_orders = len(self.active_orders)
+        exchange_orders = self._get_active_orders_from_exchange()
+        exchange_order_count = len(exchange_orders) if exchange_orders else 0
         
-        if active_order_count > 0:
-            # Still have active orders - cancellation not complete yet
+        # If either source shows active orders, wait
+        if strategy_orders > 0:
             if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-                self.logger().debug(f"⏳ Still have {active_order_count} active orders, waiting for cancellation to complete...")
+                self.logger().debug(f"⏳ Strategy tracking shows {strategy_orders} active orders, waiting...")
             return False
             
-        # All clear - no active orders and timing allows creation
+        if exchange_order_count > 0:
+            if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                self.logger().info(f"⏳ Exchange shows {exchange_order_count} active orders, waiting for cancellation...")
+                # Log order details for debugging
+                for i, order in enumerate(exchange_orders[:3]):  # Show first 3 orders
+                    if hasattr(order, 'client_order_id'):
+                        order_id = order.client_order_id[:8] + "..."
+                    elif hasattr(order, 'order_id'):
+                        order_id = order.order_id[:8] + "..."
+                    else:
+                        order_id = f"order_{i}"
+                    self.logger().debug(f"   📋 Active order: {order_id}")
+            return False
+            
+        # All clear - no active orders from any source
         if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
-            self.logger().debug(f"✅ No active orders detected, proceeding with order creation")
+            self.logger().info(f"✅ No active orders detected (strategy: {strategy_orders}, exchange: {exchange_order_count}), proceeding with creation")
         
         return True
     
