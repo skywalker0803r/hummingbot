@@ -824,7 +824,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._collect_market_variables(timestamp)
         
         # Check if algorithm is ready (enough data collected)
-        if not self._is_algorithm_ready():
+        if not self.is_algorithm_ready():
             if self._ticks_to_be_ready > 0:
                 self._ticks_to_be_ready -= 1
                 if self._ticks_to_be_ready % 10 == 0:
@@ -951,7 +951,10 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
     def is_algorithm_ready(self) -> bool:
         """Public wrapper to avoid AttributeError in environments calling is_algorithm_ready()."""
         try:
-            return self._is_algorithm_ready()
+            # Check if algorithm has enough data to make decisions
+            return (self._avg_vol is not None and 
+                    self._avg_vol.is_sampling_buffer_full and 
+                    self._ticks_to_be_ready <= 0)
         except AttributeError:
             # Fallback: derive readiness from volatility buffer only
             buffers_ready = (self._avg_vol is not None and getattr(self._avg_vol, 'is_sampling_buffer_full', False))
@@ -1008,7 +1011,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         lines.append(f"  Current Price: {self.get_price():.6f}")
         
         # Avellaneda model parameters
-        if self._is_algorithm_ready():
+        if self.is_algorithm_ready():
             volatility_pct = float(self.get_volatility()) * 100
             lines.append(f"  🎯 Strategy Parameters:")
             lines.append(f"    Risk Factor (γ): {self.gamma:.6f}")
