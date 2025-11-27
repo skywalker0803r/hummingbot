@@ -708,9 +708,12 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             
             # 1. Cancel by age (primary reason)
             age = self.current_timestamp - order.creation_timestamp
-            if age >= self._order_refresh_time:
+            # CRITICAL FIX: Use a slightly smaller threshold to ensure orders are cancelled BEFORE refresh time
+            # This prevents the case where _create_timestamp expires but orders aren't cancelled yet
+            effective_refresh_time = self._order_refresh_time - 1.0  # Cancel 1 second before refresh
+            if age >= effective_refresh_time:
                 should_cancel = True
-                cancel_reason = f"age {age:.1f}s >= {self._order_refresh_time}s"
+                cancel_reason = f"age {age:.1f}s >= {effective_refresh_time:.1f}s (refresh at {self._order_refresh_time}s)"
             
             # 2. Cancel by price deviation to prevent stale quotes
             elif proposal is not None and self._optimal_bid > 0 and self._optimal_ask > 0:
@@ -812,6 +815,23 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
             
             # 3. Cancel active orders if needed (based on timing and age)
             orders_were_cancelled = self.cancel_active_orders(proposal)
+            
+            # CRITICAL FIX: Force cancellation if create timestamp has expired and we have orders
+            # This ensures we always cancel before creating new ones when refresh time is up
+            if not orders_were_cancelled and self.active_orders and self._create_timestamp <= timestamp:
+                # Create timestamp has expired, force cancel all active orders
+                if self._logging_options & self.OPTION_LOG_CREATE_ORDER:
+                    self.logger().info(f"🔄 Create timestamp expired, forcing cancellation of {len(self.active_orders)} active orders")
+                
+                for order in self.active_orders[:]:
+                    try:
+                        self._market_info.market.cancel(self._market_info.trading_pair, order.client_order_id)
+                        orders_were_cancelled = True
+                    except Exception as e:
+                        self.logger().warning(f"⚠️ Failed to force cancel order {order.client_order_id}: {e}")
+                
+                if orders_were_cancelled:
+                    self._cancel_timestamp = timestamp + 2.0  # Wait for cancellations to complete
             
             # 4. Create new orders ONLY if no cancellation happened this tick
             # This prevents race condition where cancelled orders haven't been removed from active_orders yet
