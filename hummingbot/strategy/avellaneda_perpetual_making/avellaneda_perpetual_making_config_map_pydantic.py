@@ -86,11 +86,20 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     )
     
     min_spread: Decimal = Field(
-        default=Decimal("0.001"),
-        description="Minimum spread percentage",
+        default=Decimal("0.00005"),  # 降低預設值到 0.005% 適合高頻
+        description="Minimum spread percentage (0.005% = 0.00005)",
         ge=0,
         json_schema_extra={
-            "prompt": "Enter minimum spread percentage",
+            "prompt": "Enter minimum spread percentage (0.005% = 0.00005)",
+        }
+    )
+    
+    # 新增：強制使用最小 spread (用於刷量場景)
+    force_min_spread: bool = Field(
+        default=False,
+        description="Force use minimum spread instead of Avellaneda calculation (for volume farming)",
+        json_schema_extra={
+            "prompt": "Force use minimum spread for high-frequency trading? (Yes/No)",
         }
     )
     
@@ -210,7 +219,7 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     )
     
     adaptive_gamma_initial: Decimal = Field(
-        default=Decimal("1.0"),
+        default=Decimal("0.01"),  # 降低初始值，適合高頻交易
         description="Initial gamma value for adaptive learning",
         gt=0,
         json_schema_extra={
@@ -229,7 +238,7 @@ class AvellanedaPerpetualMakingConfigMap(BaseStrategyConfigMap):
     )
     
     adaptive_gamma_min: Decimal = Field(
-        default=Decimal("0.1"),
+        default=Decimal("0.001"),  # 降低預設最小值到 0.001
         description="Minimum gamma value",
         gt=0,
         json_schema_extra={

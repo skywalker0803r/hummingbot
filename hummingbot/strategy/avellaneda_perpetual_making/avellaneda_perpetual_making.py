@@ -171,6 +171,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                     order_amount_shape_factor: Decimal = Decimal("1.0"),
                     min_spread: Decimal = Decimal("0.01"),
                     order_amount: Decimal = Decimal("1.0"),
+                    force_min_spread: bool = False,
                     inventory_target_base_pct: Decimal = Decimal("50"),
                     volatility_buffer_size: int = 200,
                     trading_intensity_buffer_size: int = 200,
@@ -216,6 +217,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self._risk_factor = risk_factor
         self._order_amount_shape_factor = order_amount_shape_factor
         self._min_spread = min_spread
+        self._force_min_spread = force_min_spread  # 新增：強制使用最小spread
         self._order_amount = order_amount
         self._inventory_target_base_pct = inventory_target_base_pct
         self._volatility_buffer_size = volatility_buffer_size
@@ -278,6 +280,7 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
         self.logger().info(f"   🔄 Position Mode: {position_mode}")
         self.logger().info(f"   ⏰ Order Refresh Time: {self._order_refresh_time}s")
         self.logger().info(f"   🛡️ Order Management: Enhanced with confirmation mechanism")
+        self.logger().info(f"   📏 Min Spread: {self._min_spread*100:.4f}% {'(FORCED MODE - Volume Farming)' if self._force_min_spread else '(Normal)'}")
         if self._use_adaptive_gamma:
             self.logger().info(f"   🧠 Adaptive Gamma: Enabled")
 
@@ -488,7 +491,16 @@ class AvellanedaPerpetualMakingStrategy(StrategyPyBase):
                 self.logger().debug(f"   Calculated spread: {self._optimal_spread:.8f} ({calculated_spread_pct:.4f}%)")
                 self.logger().debug(f"   Minimum spread: {min_spread_abs:.8f} ({min_spread_pct:.4f}%)")
             
-            if self._optimal_spread < min_spread_abs:
+            # CRITICAL NEW: Check if force min spread is enabled for volume farming
+            if self._force_min_spread:
+                if self._logging_options & self.OPTION_LOG_STATUS_REPORT:
+                    avellaneda_spread_pct = (self._optimal_spread / current_price) * 100
+                    self.logger().info(f"🚀 FORCE MIN SPREAD MODE - Volume farming activated")
+                    self.logger().info(f"   Avellaneda calculated: {self._optimal_spread:.8f} ({avellaneda_spread_pct:.4f}%)")
+                    self.logger().info(f"   Forcing to minimum: {min_spread_abs:.8f} ({min_spread_pct:.4f}%)")
+                
+                self._optimal_spread = min_spread_abs  # Always use minimum spread
+            elif self._optimal_spread < min_spread_abs:
                 self.logger().warning(f"⚠️ Calculated spread {self._optimal_spread:.8f} below minimum {min_spread_abs:.8f}, applying minimum")
                 self._optimal_spread = min_spread_abs
             
